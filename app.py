@@ -13,6 +13,7 @@ Features:
 """
 
 from __future__ import annotations
+from typing import Any
 
 import streamlit as st
 from datetime import datetime, timezone
@@ -29,7 +30,7 @@ from steps import (
     step_followup,
     step_skip,
 )
-from store import MindMeshStore
+from store import MindMeshStore, get_database_store
 
 
 st.set_page_config(
@@ -105,9 +106,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def get_store() -> MindMeshStore:
+def get_store() -> Any:
     if "store" not in st.session_state:
-        st.session_state.store = MindMeshStore()
+        st.session_state.store = get_database_store()
     return st.session_state.store
 
 
@@ -283,12 +284,12 @@ with st.sidebar:
             reset_session()
     with col_s2:
         if st.button("🗑️ Reset DB", use_container_width=True):
-            if store.db_path.exists():
+            if hasattr(store, "db_path") and store.db_path.exists():
                 try:
                     store.db_path.unlink()
                 except Exception:
                     pass
-            st.session_state.store = MindMeshStore()
+            st.session_state.store = get_database_store()
             reset_session()
 
     st.divider()
@@ -325,6 +326,10 @@ with st.sidebar:
         st.dataframe(pd.DataFrame(rec_data), use_container_width=True, hide_index=True)
     else:
         st.caption("No encounters recorded yet for this student.")
+
+    st.divider()
+    engine_badge = "🐘 PostgreSQL" if store.engine_name == "PostgreSQL" else "🪶 SQLite"
+    st.caption(f"**Database Engine:** {engine_badge}")
 
 
 # Main Interface Header
@@ -526,9 +531,9 @@ elif flow.state == State.SKIPPED:
     if st.button("Restart Session"):
         reset_session()
 
-# Persistent SQLite Event Stream Table
+# Persistent Event Stream Table
 st.divider()
-st.subheader(f"📜 Persistent SQLite Event Stream for Student: {flow.user_id}")
+st.subheader(f"📜 Persistent {store.engine_name} Event Stream for Student: {flow.user_id}")
 events = store.get_session_events(flow.session_id)
 if events:
     event_rows = [
