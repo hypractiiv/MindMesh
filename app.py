@@ -502,7 +502,8 @@ elif flow.state == State.RECORDED:
     is_success = latest_rec and latest_rec.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP)
 
     if is_success:
-        st.balloons() if latest_rec.outcome == Outcome.FIRST_TRY_CORRECT else None
+        if latest_rec and latest_rec.outcome == Outcome.FIRST_TRY_CORRECT:
+            st.balloons()
         st.success(f"### 🎉 Review Complete: {latest_rec.outcome.value.replace('_', ' ').title()}")
     else:
         st.warning("### Review Recorded: Unresolved")
