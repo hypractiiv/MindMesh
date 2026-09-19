@@ -145,14 +145,14 @@ class LLMEvaluator:
             elif not has_cond:
                 return Verdict(
                     passed=False,
-                    objection="Loop condition must be `while low <= high`, not `<`. Otherwise the last element is never checked.",
-                    reasoning="Missing equality in loop boundary.",
+                    objection="The loop condition terminates prematurely and skips inspecting the final candidate element at the boundary.",
+                    reasoning="Missing boundary equality in loop condition.",
                     is_mismatch=(answer.self_rating >= 4),
                 )
             else:
                 return Verdict(
                     passed=False,
-                    objection="Specify midpoint calculation avoiding integer overflow e.g. low + (high - low) // 2.",
+                    objection="The midpoint calculation does not protect against potential integer overflow during addition of large index values.",
                     reasoning="Incomplete mid calculation.",
                     is_mismatch=(answer.self_rating >= 4),
                 )
@@ -165,8 +165,8 @@ class LLMEvaluator:
                 return Verdict(passed=True, reasoning="Correctly differentiated WHERE and HAVING with aggregation.")
             return Verdict(
                 passed=False,
-                objection="WHERE filters individual rows before aggregation; HAVING filters grouped rows after aggregation.",
-                reasoning="Failed to distinguish WHERE and HAVING.",
+                objection="The answer confuses the execution lifecycle of row-level filtering with group-level aggregate filtering.",
+                reasoning="Failed to distinguish WHERE and HAVING execution scope.",
                 is_mismatch=(answer.self_rating >= 4),
             )
 
@@ -177,7 +177,7 @@ class LLMEvaluator:
                 return Verdict(passed=True, reasoning="Correctly identified default argument evaluation and None idiom.")
             return Verdict(
                 passed=False,
-                objection="Default arguments are evaluated once at function definition time. Fix by defaulting to None.",
+                objection="The explanation fails to identify when Python evaluates default parameter expressions and why state is shared across calls.",
                 reasoning="Failed to identify definition-time evaluation.",
                 is_mismatch=(answer.self_rating >= 4),
             )

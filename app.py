@@ -59,12 +59,30 @@ st.markdown("""
         color: #5f6368;
     }
     .mismatch-box {
-        background-color: #fef7e0;
+        background-color: rgba(249, 171, 0, 0.12);
         border-left: 5px solid #f9ab00;
         padding: 16px;
         border-radius: 6px;
         margin-top: 15px;
         margin-bottom: 15px;
+    }
+    .mismatch-title {
+        color: #e37400;
+        font-weight: 700;
+        font-size: 1.1rem;
+        margin: 0;
+    }
+    .mismatch-desc {
+        margin: 8px 0 0 0;
+        font-size: 0.95rem;
+    }
+    .mismatch-objection {
+        font-style: italic;
+        margin: 8px 0 0 0;
+        font-size: 0.95rem;
+        font-weight: 500;
+        padding-left: 10px;
+        border-left: 2px solid rgba(249, 171, 0, 0.5);
     }
     .source-badge {
         background-color: #e8f0fe;
@@ -415,13 +433,13 @@ elif flow.state == State.WAITING_FOR_FOLLOWUP:
     st.markdown(
         f"""
         <div class='mismatch-box'>
-            <h4 style='color: #b06000; margin: 0;'>⚠️ Confidence / Correctness Mismatch Detected</h4>
-            <p style='margin: 8px 0 0 0;'>
-                You rated your confidence <strong>{latest_answer.self_rating}/5</strong>, but the evaluator flagged an error in your answer:
-            </p>
-            <p style='font-style: italic; color: #333; margin: 6px 0 0 0;'>
+            <div class='mismatch-title'>⚠️ Confidence / Correctness Mismatch Detected</div>
+            <div class='mismatch-desc'>
+                You rated your confidence <strong>{latest_answer.self_rating}/5</strong>, but the evaluator identified an issue with your approach:
+            </div>
+            <div class='mismatch-objection'>
                 "{latest_verdict.objection}"
-            </p>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,

@@ -86,15 +86,15 @@ def evaluate_rule_based(student_answer: str, self_rating: int) -> Verdict:
     # Evaluate correctness
     if returns_one:
         passed = False
-        objection = "For summing a list, the base case must return 0 (additive identity), not 1. Returning 1 adds an extra 1 to any sum."
+        objection = "Returning 1 introduces an off-by-one error because 1 is the identity for multiplication, not addition."
         reasoning = "Student specified return 1 for empty list, which is the multiplicative identity rather than additive identity."
     elif returns_none:
         passed = False
-        objection = "Base case cannot return None because adding an integer to None results in a TypeError."
+        objection = "Returning None causes an immediate TypeError when attempting to add it to a list element."
         reasoning = "Student specified returning None."
     elif returns_list:
         passed = False
-        objection = "Base case must return a numeric value (0), not a list []."
+        objection = "Returning an empty list [] produces a TypeError when combined with integer addition."
         reasoning = "Student specified returning an empty list."
     elif mentions_empty and returns_zero:
         passed = True
@@ -102,7 +102,7 @@ def evaluate_rule_based(student_answer: str, self_rating: int) -> Verdict:
         reasoning = "Correctly identified empty list condition and returning 0."
     elif "len(numbers) == 1" in text or "length 1" in text:
         passed = False
-        objection = "Using a length-1 base case fails when an empty list `sum_list([])` is passed to the function."
+        objection = "Using a length-1 base case causes a crash or missing case when an empty list `sum_list([])` is provided."
         reasoning = "Missing empty-list base case."
     elif returns_zero:
         # returns 0 without clear empty check or partially formed
@@ -111,7 +111,7 @@ def evaluate_rule_based(student_answer: str, self_rating: int) -> Verdict:
         reasoning = "Identified returning 0 for base case."
     else:
         passed = False
-        objection = "Expected an empty list check returning 0."
+        objection = "The base condition or return value fails to correctly terminate empty-list recursion."
         reasoning = "Did not clearly specify empty list condition or return 0."
 
     # Mismatch check: student is confident (rating >= 4) but answer is incorrect
