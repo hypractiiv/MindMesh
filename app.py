@@ -154,7 +154,7 @@ def get_session() -> FlowSession:
 
     if "flow_session" not in st.session_state or st.session_state.flow_session is None:
         session = FlowSession(store=store, user_id=user.username)
-        q = provider.get_question(st.session_state.current_topic)
+        q = provider.get_question(st.session_state.current_topic, shuffle=True)
         step_prompting(session, question=q)
         st.session_state.flow_session = session
     return st.session_state.flow_session

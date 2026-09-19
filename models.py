@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import random
+import re
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -57,6 +59,48 @@ class Question(BaseModel):
     rubric_criteria: Optional[List[str]] = None
     source_url: Optional[str] = None
     quiz_source: Optional[str] = None
+
+    def shuffle_options(self, seed: Optional[int] = None) -> Question:
+        """
+        Returns a new Question with options randomly shuffled among ['A', 'B', 'C', 'D'],
+        updating correct_option to match whichever letter the correct text is moved to.
+        """
+        if not self.options or len(self.options) < 2 or not self.correct_option:
+            return self.model_copy()
+
+        rng = random.Random(seed)
+        correct_text = self.options.get(self.correct_option)
+        keys = ["A", "B", "C", "D"][:len(self.options)]
+
+        values = list(self.options.values())
+        rng.shuffle(values)
+
+        new_options = {k: v for k, v in zip(keys, values)}
+
+        # Locate where the correct answer landed
+        new_correct_option = self.correct_option
+        for k, v in new_options.items():
+            if v == correct_text:
+                new_correct_option = k
+                break
+
+        # Update any explicit "Option X" text in explanation or follow_up_prompt
+        new_explanation = self.explanation
+        new_follow_up = self.follow_up_prompt
+        if self.correct_option and new_correct_option != self.correct_option:
+            pat = re.compile(rf"\boption\s+{re.escape(self.correct_option)}\b", re.IGNORECASE)
+            rep = f"Option {new_correct_option}"
+            if new_explanation:
+                new_explanation = pat.sub(rep, new_explanation)
+            if new_follow_up:
+                new_follow_up = pat.sub(rep, new_follow_up)
+
+        return self.model_copy(update={
+            "options": new_options,
+            "correct_option": new_correct_option,
+            "explanation": new_explanation,
+            "follow_up_prompt": new_follow_up,
+        })
 
 
 class User(BaseModel):

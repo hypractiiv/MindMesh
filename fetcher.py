@@ -149,11 +149,11 @@ GROUP BY department_id;""",
 # append_to(2) -> [1, 2]  <-- Unexpected persistence!""",
         options={
             "A": "Python creates a new list instance on every call, wasting heap memory; fix by using a tuple.",
-            "B": "Default arguments are evaluated once at definition time, sharing the list across calls; fix with target=None.",
-            "C": "Python raises a compile-time SyntaxError when a mutable literal is used as a default parameter.",
+            "B": "Python raises a compile-time SyntaxError when a mutable literal is used as a default parameter.",
+            "C": "Default arguments are evaluated once at definition time, sharing the list across calls; fix with target=None.",
             "D": "Mutable defaults cause variables to leak into global module scope; fix with global target.",
         },
-        correct_option="B",
+        correct_option="C",
         explanation=(
             "Default parameter expressions are evaluated once when the function definition is executed. "
             "The same list is reused across calls. The fix is `target=None` with `if target is None: target = []`."
@@ -185,12 +185,12 @@ def fib(n):
 memo = {}
 ...""",
         options={
-            "A": "Greedy choice property and Divide-and-conquer; memoization sorts the problem space.",
-            "B": "Optimal substructure and Overlapping subproblems; memoization caches intermediate results.",
+            "A": "Optimal substructure and Overlapping subproblems; memoization caches intermediate results.",
+            "B": "Greedy choice property and Divide-and-conquer; memoization sorts the problem space.",
             "C": "Disjoint subproblems and Heuristic pruning; memoization replaces recursion with threads.",
             "D": "Linear time bounds and Polynomial storage; memoization compresses DAG nodes.",
         },
-        correct_option="B",
+        correct_option="A",
         explanation=(
             "Dynamic Programming requires optimal substructure and overlapping subproblems. "
             "Memoization caches subproblem outputs so each unique subproblem is computed only once."
@@ -220,11 +220,11 @@ memo = {}
 # 2: Fully explored (Black)""",
         options={
             "A": "A 2-color visited set is sufficient; any visited node indicates a cycle.",
-            "B": "A 3-color model (White/Gray/Black) is required; a cycle is confirmed only by a Back Edge to a Gray node.",
+            "B": "A 4-color model is mandatory to account for undirected bridge edges.",
             "C": "Directed graph cycle detection requires Dijkstra's algorithm; DFS cannot detect cycles.",
-            "D": "A 4-color model is mandatory to account for undirected bridge edges.",
+            "D": "A 3-color model (White/Gray/Black) is required; a cycle is confirmed only by a Back Edge to a Gray node.",
         },
-        correct_option="B",
+        correct_option="D",
         explanation=(
             "In directed graphs, an already visited node may be reached via a cross edge without creating a cycle. "
             "A 3-color model detects cycles by identifying Back Edges to nodes currently in the recursion stack (Gray)."
@@ -293,12 +293,12 @@ memo = {}
 # True shortest path A to C is A -> B -> C (total: -1).
 # Dijkstra greedily finalizes C as 5 upon initial extraction.""",
         options={
-            "A": "Negative weights cause an infinite recursion stack overflow; use Prim's algorithm instead.",
-            "B": "Dijkstra greedily finalizes node distances assuming non-negative weights; use Bellman-Ford instead.",
+            "A": "Dijkstra greedily finalizes node distances assuming non-negative weights; use Bellman-Ford instead.",
+            "B": "Negative weights cause an infinite recursion stack overflow; use Prim's algorithm instead.",
             "C": "Negative weights invert the min-heap into a max-heap; use Kruskal's algorithm instead.",
             "D": "Dijkstra only functions on Directed Acyclic Graphs; use Breadth-First Search instead.",
         },
-        correct_option="B",
+        correct_option="A",
         explanation=(
             "Dijkstra relies on the greedy property that adding an edge to a path can never decrease its total length. "
             "Once a vertex is marked visited and extracted from the priority queue, its distance is considered final. "
@@ -331,11 +331,11 @@ print(a == b)  # Equality test
 print(a is b)  # Identity test""",
         options={
             "A": "Both evaluate to True because their elements have identical values and types.",
-            "B": "a == b is True (values are equivalent), but a is b is False (distinct objects at different memory addresses).",
+            "B": "Both evaluate to False until a and b are explicitly interned or cast to tuples.",
             "C": "a == b is False because they are distinct list instances, but a is b is True.",
-            "D": "Both evaluate to False until a and b are explicitly interned or cast to tuples.",
+            "D": "a == b is True (values are equivalent), but a is b is False (distinct objects at different memory addresses).",
         },
-        correct_option="B",
+        correct_option="D",
         explanation=(
             "`==` tests value equality by calling `__eq__`, comparing the contents of the objects. "
             "`is` tests object identity (`id(a) == id(b)`), checking whether both variables point to the exact same location in memory. "
@@ -365,11 +365,11 @@ print(a is b)  # Identity test""",
 # Method 2: Table buckets store entries directly; collisions probe subsequent array slots.""",
         options={
             "A": "Separate Chaining rehashes the entire table; Open Addressing permanently discards colliding keys.",
-            "B": "Separate Chaining stores colliding entries in linked lists outside the array; Open Addressing stores all entries within the primary array by probing vacant slots.",
-            "C": "Open Addressing allows the load factor to exceed 1.0; Separate Chaining crashes when load factor > 0.5.",
+            "B": "Open Addressing allows the load factor to exceed 1.0; Separate Chaining crashes when load factor > 0.5.",
+            "C": "Separate Chaining stores colliding entries in linked lists outside the array; Open Addressing stores all entries within the primary array by probing vacant slots.",
             "D": "Separate Chaining requires cryptographic SHA-256 hashes; Open Addressing only works with consecutive integers.",
         },
-        correct_option="B",
+        correct_option="C",
         explanation=(
             "In Separate Chaining, table buckets point to auxiliary data structures (like linked lists or dynamic arrays) "
             "that hold all colliding items, allowing the load factor to exceed 1.0. "
@@ -434,12 +434,12 @@ print(a is b)  # Identity test""",
         code_context="""# TCP: Connection-oriented, full duplex, 20-60 byte header
 # UDP: Connectionless, message-oriented, fixed 8 byte header""",
         options={
-            "A": "Hardware-level DMA channel reservation and token ring collision avoidance.",
-            "B": "Three-way handshake (SYN, SYN-ACK, ACK), sequence/acknowledgment numbers, and sliding-window flow control.",
+            "A": "Three-way handshake (SYN, SYN-ACK, ACK), sequence/acknowledgment numbers, and sliding-window flow control.",
+            "B": "Hardware-level DMA channel reservation and token ring collision avoidance.",
             "C": "Unordered packet multicasting and unthrottled datagram broadcast without checksums.",
             "D": "Mandatory application-layer TLS encryption and HTTP/2 multiplexing.",
         },
-        correct_option="B",
+        correct_option="A",
         explanation=(
             "TCP achieves reliability and ordering through a three-way connection handshake, sequence numbers to reassemble "
             "packets in correct order, acknowledgments with retransmission timers for lost packets, and sliding-window flow control. "
@@ -469,11 +469,11 @@ Promise.resolve().then(() => console.log("3"));
 console.log("4");""",
         options={
             "A": "1, 2, 3, 4 (FIFO execution order based on line position)",
-            "B": "1, 4, 3, 2 (Synchronous stack executes first, then microtasks [Promises], then macrotasks [setTimeout])",
-            "C": "1, 3, 4, 2 (Promise callbacks take precedence over all synchronous console logs)",
+            "B": "1, 3, 4, 2 (Promise callbacks take precedence over all synchronous console logs)",
+            "C": "1, 4, 3, 2 (Synchronous stack executes first, then microtasks [Promises], then macrotasks [setTimeout])",
             "D": "1, 4, 2, 3 (setTimeout with 0ms delay takes precedence over Promise microtasks)",
         },
-        correct_option="B",
+        correct_option="C",
         explanation=(
             "1. Synchronous code executes immediately on the call stack: prints '1' then '4'. "
             "2. `setTimeout(..., 0)` schedules its callback into the Macrotask (Task) queue. "
@@ -506,12 +506,12 @@ UPDATE accounts SET balance = balance - 100 WHERE id = 1; -- Debit
 UPDATE accounts SET balance = balance + 100 WHERE id = 2; -- Credit
 COMMIT;""",
         options={
-            "A": "Consistency (ensures schema integrity constraints and foreign keys are never violated).",
-            "B": "Atomicity (the all-or-nothing principle: failed transactions are automatically rolled back).",
+            "A": "Atomicity (the all-or-nothing principle: failed transactions are automatically rolled back).",
+            "B": "Consistency (ensures schema integrity constraints and foreign keys are never violated).",
             "C": "Isolation (ensures concurrent transactions do not observe intermediate states).",
             "D": "Durability (ensures committed transactions survive unexpected power loss).",
         },
-        correct_option="B",
+        correct_option="A",
         explanation=(
             "Atomicity guarantees that a database transaction is treated as a single indivisible unit. "
             "Either all SQL statements in the transaction are successfully committed, or if any error or crash occurs, "
@@ -544,11 +544,11 @@ def compute_heavy(n):
 # Which module runs independent processes with separate GILs across CPU cores?""",
         options={
             "A": "The GIL prevents race conditions in asyncio event loops; use greenlet threads for CPU parallelism.",
-            "B": "The GIL ensures thread-safe memory management and reference counting; CPU-bound tasks should use the multiprocessing module.",
+            "B": "The GIL is a hardware CPU lock; Python programs cannot execute across multiple cores under any circumstances.",
             "C": "The GIL is a compiler optimization; invoking threading.Thread automatically bypasses the GIL on multi-core servers.",
-            "D": "The GIL is a hardware CPU lock; Python programs cannot execute across multiple cores under any circumstances.",
+            "D": "The GIL ensures thread-safe memory management and reference counting; CPU-bound tasks should use the multiprocessing module.",
         },
-        correct_option="B",
+        correct_option="D",
         explanation=(
             "CPython uses reference counting for garbage collection, which requires synchronization to avoid memory corruption. "
             "The GIL was introduced as a mutex to protect Python object access, ensuring only one thread executes Python bytecode at a time. "
@@ -597,29 +597,31 @@ class InternetQAProvider:
             for q in CURATED_TOPICS.values()
         ]
 
-    def get_question(self, topic_or_id: str) -> Question:
+    def get_question(self, topic_or_id: str, shuffle: bool = False) -> Question:
         """
         Retrieves a Question for the given topic:
         1. Checks curated catalog first (exact key or partial match).
         2. Checks keyword alias mappings.
         3. If not found, fetches live from Wikipedia / Internet knowledge and synthesizes a Question.
+        If shuffle is True, randomizes option keys so the correct answer is not predictably Option B.
         """
         cleaned = topic_or_id.strip()
         slug = self._slugify(cleaned)
 
         # 1. Exact catalog match
         if slug in CURATED_TOPICS:
-            return CURATED_TOPICS[slug]
+            q = CURATED_TOPICS[slug]
+            return q.shuffle_options() if shuffle else q
 
         # 2. Case-insensitive full name match
         for q in CURATED_TOPICS.values():
             if q.topic_name and cleaned.lower() == q.topic_name.lower():
-                return q
+                return q.shuffle_options() if shuffle else q
 
         # 3. Live internet fetch
-        return self.fetch_from_internet(cleaned)
+        return self.fetch_from_internet(cleaned, shuffle=shuffle)
 
-    def fetch_with_gemini(self, topic_query: str) -> Optional[Question]:
+    def fetch_with_gemini(self, topic_query: str, shuffle: bool = True) -> Optional[Question]:
         """
         Synthesizes an authentic, topic-specific multiple-choice question using Google Gemini API.
         Models the question after reputable quiz websites (GeeksforGeeks, Sanfoundry, LeetCode, Real Python).
@@ -640,8 +642,8 @@ class InternetQAProvider:
             f"- prompt_text: detailed, clear question prompt explaining the scenario\n"
             f"- code_context: optional relevant code snippet, query, or diagram structure (or null)\n"
             f"- options: dictionary with exactly 4 keys: 'A', 'B', 'C', 'D' containing distinct, authentic technical choices\n"
-            f"- correct_option: 'B' (designate option B as the correct answer and provide 3 plausible distractors for A, C, and D)\n"
-            f"- explanation: thorough technical explanation why option B is correct and why each distractor fails (min 40 characters)\n"
+            f"- correct_option: randomly choose one of 'A', 'B', 'C', or 'D' as the correct answer (do NOT always choose 'B'; vary the letter and provide 3 plausible distractors for the other letters)\n"
+            f"- explanation: thorough technical explanation why the chosen correct option is correct and why each distractor fails (min 40 characters)\n"
             f"- follow_up_prompt: conceptual question verifying deeper understanding and handling of edge cases\n"
             f"- rubric_criteria: list of 2 to 3 specific criteria for grading\n"
             f"- quiz_source: name of the modeled quiz source (e.g. 'GeeksforGeeks Algorithms Quiz', 'Sanfoundry Data Structures MCQs', 'LeetCode Explore')\n"
@@ -681,32 +683,36 @@ class InternetQAProvider:
                                 src_url = q_dict.get("source_url") or f"https://en.wikipedia.org/wiki/{clean_title}"
                                 if not str(src_url).startswith("http"):
                                     src_url = f"https://en.wikipedia.org/wiki/{clean_title}"
-                                return Question(
+                                correct_opt = q_dict.get("correct_option")
+                                if correct_opt not in {"A", "B", "C", "D"}:
+                                    correct_opt = "B"
+                                q = Question(
                                     concept_id=clean_slug,
                                     topic_name=q_dict.get("topic_name") or topic_query.title(),
                                     prompt_text=q_dict.get("prompt_text") or f"Question on {topic_query}",
                                     code_context=q_dict.get("code_context"),
                                     options=options,
-                                    correct_option=q_dict.get("correct_option") or "B",
+                                    correct_option=correct_opt,
                                     explanation=q_dict.get("explanation") or f"Authoritative explanation for {topic_query}",
                                     follow_up_prompt=q_dict.get("follow_up_prompt") or f"Explain why the alternatives fail for {topic_query}.",
                                     rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
                                     source_url=src_url,
                                     quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (Gemini AI)",
                                 )
+                                return q.shuffle_options() if shuffle else q
             except Exception:
                 continue
 
         return None
 
-    def fetch_from_internet(self, topic_query: str, use_gemini: bool = True) -> Question:
+    def fetch_from_internet(self, topic_query: str, use_gemini: bool = True, shuffle: bool = False) -> Question:
         """
         Fetches educational background and constructs an authentic, topic-specific Question:
         1. Attempts high-quality synthesis via Google Gemini API.
         2. If unavailable or offline, retrieves from Wikipedia REST API with factual extraction.
         """
         if use_gemini and self.gemini_api_key:
-            gemini_q = self.fetch_with_gemini(topic_query)
+            gemini_q = self.fetch_with_gemini(topic_query, shuffle=shuffle)
             if gemini_q is not None:
                 return gemini_q
         slug = self._slugify(topic_query)
@@ -791,7 +797,7 @@ class InternetQAProvider:
             f"{secondary_fact} Options A, C, and D introduce invalid assumptions or flawed operational constraints."
         )
 
-        return Question(
+        q = Question(
             concept_id=slug,
             topic_name=topic_title,
             prompt_text=prompt_text,
@@ -804,6 +810,7 @@ class InternetQAProvider:
             source_url=source_url,
             quiz_source="Authoritative CS Documentation & Topic Assessment",
         )
+        return q.shuffle_options() if shuffle else q
 
     def _slugify(self, text: str) -> str:
         s = text.lower().strip()

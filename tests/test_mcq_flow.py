@@ -172,7 +172,7 @@ def test_live_fetcher_synthesizes_mcq():
     assert q.options is not None
     assert len(q.options) == 4
     assert set(q.options.keys()) == {"A", "B", "C", "D"}
-    assert q.correct_option == "B"
+    assert q.correct_option in {"A", "B", "C", "D"}
     assert q.explanation is not None
     assert q.quiz_source is not None
 
@@ -239,4 +239,43 @@ def test_os_deadlock_quiz_first_try_correct_explanation(temp_store):
     assert rec is not None
     assert rec.outcome == Outcome.FIRST_TRY_CORRECT
     assert rec.confidence == 5
+
+
+def test_shuffle_options_distribution_and_invariants():
+    """Verify that Question.shuffle_options() distributes correct answers randomly across A, B, C, and D."""
+    from fetcher import CURATED_TOPICS
+    base_q = CURATED_TOPICS["recursion_base_case"]
+    original_correct_text = base_q.options[base_q.correct_option]
+
+    observed_positions = set()
+    for seed in range(50):
+        shuffled = base_q.shuffle_options(seed=seed)
+        assert set(shuffled.options.keys()) == {"A", "B", "C", "D"}
+        assert shuffled.correct_option in {"A", "B", "C", "D"}
+        # Guarantee invariant: text of correct answer matches
+        assert shuffled.options[shuffled.correct_option] == original_correct_text
+        observed_positions.add(shuffled.correct_option)
+
+    # Over 50 shuffles, all 4 positions A, B, C, D must be represented
+    assert observed_positions == {"A", "B", "C", "D"}
+
+
+def test_curated_topics_baseline_not_always_b():
+    """Verify that curated topics catalog has a varied distribution of baseline correct options."""
+    from fetcher import CURATED_TOPICS
+    all_correct_options = {q.correct_option for q in CURATED_TOPICS.values()}
+    # Must include A, B, C, and D across the catalog
+    assert all_correct_options == {"A", "B", "C", "D"}
+
+
+def test_provider_get_question_shuffle_enabled():
+    """Verify InternetQAProvider.get_question with shuffle=True produces randomized option positions."""
+    from fetcher import InternetQAProvider
+    provider = InternetQAProvider()
+    positions = set()
+    for _ in range(30):
+        q = provider.get_question("recursion_base_case", shuffle=True)
+        positions.add(q.correct_option)
+    assert len(positions) > 1
+
 
