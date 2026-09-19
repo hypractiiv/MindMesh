@@ -1,0 +1,306 @@
+"""
+cli.py - Command-Line Interface and 8-Beat Judge Demo Runner for MindMesh.
+
+Usage:
+  python cli.py --demo            # Run automated 8-beat judge demo
+  python cli.py --interactive     # Run interactive student review session (with topic choice)
+  python cli.py --topic <name>    # Run review for a specific internet or curated topic
+  python cli.py --history         # Display persistent SQLite concept records and events
+  python cli.py --fast-forward 72 # Fast-forward review clock by hours
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from decay import fast_forward_record, is_due_for_review
+from fetcher import CURATED_TOPICS, InternetQAProvider
+from flow import FlowSession
+from models import Outcome, State
+from steps import (
+    step_answering,
+    step_checking,
+    step_followup,
+    step_prompting,
+)
+from store import MindMeshStore
+
+
+def print_banner(title: str) -> None:
+    border = "=" * 70
+    print(f"\n{border}\n  {title}\n{border}")
+
+
+def print_beat(beat_num: int, title: str, purpose: str) -> None:
+    print(f"\n>>> [BEAT {beat_num}] {title}")
+    print(f"    Purpose: {purpose}")
+    print("-" * 70)
+
+
+def run_judge_demo(delay: float = 0.8) -> None:
+    """Executes the exact eight-beat demo sequence specified in Section 10 of the plan."""
+    db_path = Path("mindmesh_demo.db")
+    if db_path.exists():
+        try:
+            db_path.unlink()
+        except Exception:
+            pass
+
+    store = MindMeshStore(db_path=db_path)
+
+    print_banner("MINDMESH: 8-BEAT JUDGE DEMO FLOW")
+    print("Agentic Learning-Confidence Tracker (Concept: Recursion Base Case)")
+    time.sleep(delay)
+
+    # BEAT 1
+    print_beat(1, "Old autograder-passing submission", "Establish the problem.")
+    print("Historical Context: Student passed an autograder yesterday with code:")
+    print("  def sum_list(numbers):")
+    print("      if len(numbers) == 0: return 0")
+    print("      return numbers[0] + sum_list(numbers[1:])")
+    print("Question: Does the student actually understand the base case, or did they guess?")
+    time.sleep(delay)
+
+    # BEAT 2
+    session_enc1 = "demo-session-enc-1"
+    session1 = FlowSession(session_id=session_enc1, store=store)
+    step_prompting(session1, topic="recursion_base_case")
+
+    print_beat(2, "Student gives wrong base case and self-rates 4/5", "Create the confidence/correctness mismatch.")
+    print(f"Current State: [{session1.state.value}]")
+    print(f"Question: {session1.question.prompt_text}")
+    print("\nStudent Submission:")
+    wrong_answer = "if len(numbers) == 0: return 1"
+    self_rating = 4
+    print(f"  Answer:      \"{wrong_answer}\"")
+    print(f"  Self-Rating: {self_rating}/5 (Highly Confident)")
+    step_answering(session1, wrong_answer, self_rating=self_rating)
+    print(f"State transition -> [{session1.state.value}]")
+    time.sleep(delay)
+
+    # BEAT 3
+    print_beat(3, "Evaluator flags answer as incorrect", "Show independent checking.")
+    print("System evaluates submission against domain rubric...")
+    verdict1 = step_checking(session1)
+    print(f"  Passed:      {verdict1.passed}")
+    print(f"  Mismatch:    {verdict1.is_mismatch} (Student rated 4/5 but answer failed!)")
+    print(f"  Objection:   \"{verdict1.objection}\"")
+    time.sleep(delay)
+
+    # BEAT 4
+    print_beat(4, "System asks one targeted follow-up", "Show adaptive backward transition.")
+    print(f"State transition: Checking -> [{session1.state.value}]")
+    print(f"Targeted Prompt: \"{session1.question.follow_up_prompt}\"")
+    print("System pauses and waits for the human to answer...")
+    time.sleep(delay)
+
+    # BEAT 5
+    print_beat(5, "Student answers correctly", "Human remains responsible for the answer.")
+    corrected_answer = "if not numbers: return 0"
+    print(f"Student Follow-up Submission: \"{corrected_answer}\"")
+    step_followup(session1, corrected_answer)
+    print(f"State transition -> [{session1.state.value}]")
+    verdict2 = step_checking(session1)
+    print(f"Evaluator Verdict: Passed={verdict2.passed}")
+    time.sleep(delay)
+
+    # BEAT 6
+    print_beat(6, "Record shows confidence 3 and 'resolved on follow-up'", "Show persistent state.")
+    print(f"State transition -> [{session1.state.value}]")
+    rec1 = store.get_latest_concept_record("recursion_base_case")
+    print("Persisted ConceptRecord in SQLite:")
+    print(f"  Session ID:     {rec1.session_id}")
+    print(f"  Outcome:        {rec1.outcome.value}")
+    print(f"  Confidence:     {rec1.confidence} / 5")
+    print(f"  Attempts Count: {rec1.attempts_count}")
+    print(f"  Next Review At: {rec1.next_review_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    time.sleep(delay)
+
+    # BEAT 7
+    print_beat(7, "Fast-forward the clock with debug mode", "Show next-review scheduling.")
+    print("Simulating elapsed time: fast-forwarding 72 hours...")
+    ff_rec = fast_forward_record(rec1, hours=72.0)
+    store.save_concept_record(ff_rec)
+    due = is_due_for_review(ff_rec)
+    print(f"  Concept is now due for review: {due}")
+    time.sleep(delay)
+
+    # BEAT 8
+    print_beat(8, "Reopen the concept; show improved first-try outcome", "Prove persistence matters.")
+    session_enc2 = "demo-session-enc-2"
+    session2 = FlowSession(session_id=session_enc2, store=store)
+    step_prompting(session2, topic="recursion_base_case")
+
+    events = store.get_session_events(session_enc2)
+    prior_info = events[0].payload.get("prior_history")
+    print("System context loaded from prior encounter:")
+    print(f"  Previous encounters: {prior_info['previous_encounters']}")
+    print(f"  Last outcome:        {prior_info['last_outcome']}")
+    print(f"  Last confidence:     {prior_info['last_confidence']}")
+
+    print("\nStudent second encounter response:")
+    mastery_answer = "len(numbers) == 0: return 0"
+    mastery_rating = 5
+    print(f"  Answer:      \"{mastery_answer}\"")
+    print(f"  Self-Rating: {mastery_rating}/5")
+    step_answering(session2, mastery_answer, self_rating=mastery_rating)
+    step_checking(session2)
+
+    rec2 = store.get_latest_concept_record("recursion_base_case")
+    print("\nUpdated Persistence in SQLite:")
+    print(f"  Outcome:        {rec2.outcome.value}")
+    print(f"  Confidence:     {rec2.confidence} / 5")
+    print(f"  Next Review At: {rec2.next_review_at.strftime('%Y-%m-%d %H:%M:%S UTC')} (+7 days interval)")
+
+    print_banner("DEMO COMPLETED SUCCESSFULLY")
+
+
+def run_interactive(topic: str | None = None) -> None:
+    """Runs an interactive session with optional topic selection and internet Q&A retrieval."""
+    provider = InternetQAProvider()
+    store = MindMeshStore()
+
+    if not topic:
+        print_banner("SELECT TOPIC")
+        print("1. Recursion: Base Case in List Summation")
+        print("2. Binary Search: Midpoint & Boundary Conditions")
+        print("3. SQL: WHERE vs HAVING Clause Filtering")
+        print("4. Python: Mutable Default Arguments Bug")
+        print("5. Dynamic Programming: Memoization vs Tabulation")
+        print("6. Graph Algorithms: Directed Graph Cycle Detection")
+        print("7. Search Internet for Custom Topic")
+
+        choice = input("\nEnter choice (1-7, default 1): ").strip()
+        choice_map = {
+            "1": "recursion_base_case",
+            "2": "binary_search_bounds",
+            "3": "sql_where_vs_having",
+            "4": "python_mutable_defaults",
+            "5": "dp_memoization_base",
+            "6": "graph_cycle_detection",
+        }
+
+        if choice == "7":
+            topic = input("Enter any CS topic to search the web for: ").strip()
+        else:
+            topic = choice_map.get(choice, "recursion_base_case")
+
+    session = FlowSession(store=store)
+    print(f"\nFetching question for '{topic}' from internet/knowledge base...")
+    step_prompting(session, topic=topic)
+
+    q = session.question
+    print_banner(f"MINDMESH: {q.topic_name or q.concept_id}")
+    if q.source_url:
+        print(f"Internet Source: {q.source_url}\n")
+
+    # Check prior history
+    records = store.get_concept_records(q.concept_id)
+    if records:
+        print(f"Welcome back! You have {len(records)} previous review(s) for this concept.")
+        print(f"Last outcome: {records[-1].outcome.value} (Confidence: {records[-1].confidence}/5)")
+    else:
+        print("Welcome! This is your first encounter for this concept.")
+
+    print(f"\nQuestion:\n{q.prompt_text}")
+    if q.code_context:
+        print(f"\nCode Context:\n{q.code_context}")
+
+    ans_text = input("\nYour answer: ").strip()
+    while not ans_text:
+        ans_text = input("Please provide an answer: ").strip()
+
+    rating_input = input("How confident are you? (1=Not confident, 5=Extremely confident): ").strip()
+    try:
+        rating = int(rating_input)
+        rating = max(1, min(5, rating))
+    except ValueError:
+        rating = 3
+
+    step_answering(session, ans_text, rating)
+    print("\nEvaluating your answer against rubric...")
+    verdict = step_checking(session)
+
+    if session.state == State.WAITING_FOR_FOLLOWUP:
+        print(f"\n⚠️ Mismatch detected! (Your self-rating: {rating}/5, Evaluator flagged an issue).")
+        print(f"Evaluator Objection: {verdict.objection}")
+        print(f"\nTargeted Follow-up Question:\n{q.follow_up_prompt}")
+
+        fu_text = input("\nYour corrected answer: ").strip()
+        step_followup(session, fu_text)
+        print("\nRe-evaluating...")
+        verdict2 = step_checking(session)
+
+        if verdict2.passed:
+            print("\nGreat job! Your corrected answer resolved the issue.")
+        else:
+            print(f"\nFollow-up answer was still not complete: {verdict2.objection}")
+
+    rec = store.get_latest_concept_record(q.concept_id)
+    print_banner("SESSION COMPLETED")
+    print(f"Final State:     {session.state.value}")
+    print(f"Outcome:         {rec.outcome.value}")
+    print(f"Confidence:      {rec.confidence}/5")
+    print(f"Next Review Due: {rec.next_review_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+
+def display_history() -> None:
+    store = MindMeshStore()
+    with store._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM concept_records ORDER BY created_at ASC")
+        records = cursor.fetchall()
+
+    print_banner("MINDMESH PERSISTENT HISTORY (ALL TOPICS)")
+    if not records:
+        print("No concept records found in database.")
+        return
+
+    print(f"{'#':<4} {'Concept':<25} {'Outcome':<24} {'Confidence':<12} {'Next Review':<22}")
+    print("-" * 90)
+    for i, r in enumerate(records, start=1):
+        print(
+            f"{i:<4} {r['concept_id'][:23]:<25} {r['outcome']:<24} {r['confidence']:<12} {r['next_review_at'][:16]:<22}"
+        )
+
+    print("\nTotal Events in SQLite Log:", len(store.get_all_session_events()))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MindMesh Learning-Confidence Tracker CLI")
+    parser.add_argument("--demo", action="store_true", help="Run the automated 8-beat judge demo")
+    parser.add_argument("--interactive", action="store_true", help="Run an interactive session")
+    parser.add_argument("--topic", type=str, help="Specify topic name or internet query")
+    parser.add_argument("--history", action="store_true", help="View concept history from SQLite")
+    parser.add_argument("--fast-forward", type=float, metavar="HOURS", help="Fast-forward the latest review clock by hours")
+
+    args = parser.parse_args()
+
+    if args.demo:
+        run_judge_demo()
+    elif args.topic:
+        run_interactive(topic=args.topic)
+    elif args.interactive:
+        run_interactive()
+    elif args.history:
+        display_history()
+    elif args.fast_forward is not None:
+        store = MindMeshStore()
+        rec = store.get_latest_concept_record("recursion_base_case")
+        if not rec:
+            print("No records found to fast forward.")
+            return
+        ff_rec = fast_forward_record(rec, hours=args.fast_forward)
+        store.save_concept_record(ff_rec)
+        print(f"Fast-forwarded latest record by {args.fast_forward} hours.")
+        print(f"Due for review now: {is_due_for_review(ff_rec)}")
+    else:
+        run_judge_demo()
+
+
+if __name__ == "__main__":
+    main()
