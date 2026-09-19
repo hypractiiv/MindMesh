@@ -1,8 +1,5 @@
 # MindMesh: Persistent Learning-Confidence Tracker
 
-> **Agentathon 2026 Submission**  
-> Built according to the *MindMesh 5-Person Build, Preparation & Demo Plan*.
-
 ---
 
 ## 🎯 The MVP in One Sentence
