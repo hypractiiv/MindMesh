@@ -66,7 +66,10 @@ def test_student_data_isolation_same_concept(temp_store):
     # --- Alice's Session ---
     s_alice = FlowSession(session_id="alice-sess-1", store=temp_store, user_id="alice")
     step_prompting(s_alice, topic=concept)
-    step_answering(s_alice, "if not numbers: return 0", self_rating=5)
+    step_answering(s_alice, "B", self_rating=5)
+    step_checking(s_alice)
+    assert s_alice.state == State.WAITING_FOR_FOLLOWUP  # Verification prompt for first-try correct MCQ
+    step_followup(s_alice, "The empty list has no elements, so its sum is 0 (the additive identity).")
     step_checking(s_alice)
     assert s_alice.state == State.RECORDED
 

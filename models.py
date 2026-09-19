@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -45,11 +45,14 @@ class Verdict(BaseModel):
 
 
 class Question(BaseModel):
-    """Concept question specification with dynamic internet retrieval metadata."""
+    """Concept question specification with dynamic internet retrieval metadata and MCQ options."""
     concept_id: str
     topic_name: Optional[str] = None
     prompt_text: str
     code_context: Optional[str] = None
+    options: Optional[Dict[str, str]] = None
+    correct_option: Optional[str] = None
+    explanation: Optional[str] = None
     follow_up_prompt: Optional[str] = None
     rubric_criteria: Optional[List[str]] = None
     source_url: Optional[str] = None

@@ -33,9 +33,28 @@ FOLLOW_UP_PROMPT = (
 
 QUESTION = Question(
     concept_id=CONCEPT_ID,
+    topic_name=CONCEPT_TITLE,
     prompt_text=PROMPT_TEXT,
     code_context=CODE_CONTEXT,
+    options={
+        "A": "if len(numbers) == 0: return 1  (Multiplicative identity)",
+        "B": "if not numbers: return 0  (Additive identity for empty list)",
+        "C": "if not numbers: return None  (Terminates recursion with null)",
+        "D": "if len(numbers) == 1: return numbers[0]  (Single element check)",
+    },
+    correct_option="B",
+    explanation=(
+        "An empty list has no elements, so its sum must be 0 (the additive identity). "
+        "Returning 1 produces an off-by-one error (e.g. sum_list([5]) == 6), "
+        "and returning None causes a TypeError when added to an integer."
+    ),
     follow_up_prompt=FOLLOW_UP_PROMPT,
+    rubric_criteria=[
+        "Must check for empty list (e.g. len(numbers) == 0 or not numbers).",
+        "Must return 0 (the additive identity).",
+        "Returning 1 or None is incorrect.",
+    ],
+    source_url="https://en.wikipedia.org/wiki/Recursion_(computer_science)#Base_case",
 )
 
 

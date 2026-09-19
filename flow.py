@@ -110,16 +110,21 @@ class FlowSession:
         """
         Determines the next state from CHECKING.
         Rule:
-        - If answer passed -> RECORDED
-        - If answer failed and mismatch detected on attempt 1 (student self_rating >= 4)
-          AND revision limit (1 follow-up round) not exceeded -> WAITING_FOR_FOLLOWUP
-        - Otherwise (answer failed without mismatch, or attempt 2 follow-up exhausted) -> RECORDED
+        - If attempt 1 and MCQ answer passed -> WAITING_FOR_FOLLOWUP (prompts for explanation to verify lucky guess)
+        - If attempt 1 and answer passed for non-MCQ -> RECORDED
+        - If attempt 1 and answer failed with mismatch (self_rating >= 4) -> WAITING_FOR_FOLLOWUP
+        - If attempt 2 (explanation or follow-up) completed -> RECORDED (strictly enforeces 1 follow-up round)
+        - Otherwise (failed without mismatch) -> RECORDED
         """
-        if verdict.passed:
+        # Enforce max 1 follow-up round: attempt_count == 1 allows follow-up or explanation
+        if self.attempt_count <= 1:
+            if verdict.passed:
+                if self.question and self.question.options:
+                    # Right in the first try on MCQ: ask user for explanation
+                    return State.WAITING_FOR_FOLLOWUP
+                return State.RECORDED
+            elif verdict.is_mismatch:
+                return State.WAITING_FOR_FOLLOWUP
             return State.RECORDED
-
-        # Enforce max 1 follow-up round: attempt_count == 1 allows follow-up if mismatch
-        if self.attempt_count <= 1 and verdict.is_mismatch:
-            return State.WAITING_FOR_FOLLOWUP
 
         return State.RECORDED

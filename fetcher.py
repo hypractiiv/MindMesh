@@ -29,6 +29,17 @@ CURATED_TOPICS: Dict[str, Question] = {
     # Base case goes here
     ...
     return numbers[0] + sum_list(numbers[1:])""",
+        options={
+            "A": "if len(numbers) == 0: return 1  (Multiplicative identity)",
+            "B": "if not numbers: return 0  (Additive identity for empty list)",
+            "C": "if not numbers: return None  (Terminates recursion with null)",
+            "D": "if len(numbers) == 1: return numbers[0]  (Fails on empty list input)",
+        },
+        correct_option="B",
+        explanation=(
+            "An empty list has no elements, so its sum must be 0 (the additive identity). "
+            "Returning 1 produces an off-by-one error, and returning None causes a TypeError."
+        ),
         follow_up_prompt=(
             "Think about what `sum_list([])` should return when there are no elements to sum. "
             "Why would returning 1 cause `sum_list([5])` to equal 6 instead of 5? "
@@ -59,6 +70,17 @@ CURATED_TOPICS: Dict[str, Question] = {
         else:
             high = mid - 1
     return -1""",
+        options={
+            "A": "while low < high: and mid = (low + high) // 2",
+            "B": "while low <= high: and mid = low + (high - low) // 2",
+            "C": "while low <= high: and mid = (high - low) // 2",
+            "D": "while low != high: and mid = high // 2",
+        },
+        correct_option="B",
+        explanation=(
+            "The loop condition `low <= high` ensures single-element subarrays are inspected. "
+            "Calculating `mid = low + (high - low) // 2` prevents integer overflow in bounded-width integer types."
+        ),
         follow_up_prompt=(
             "Consider what happens when the target is at the very last element `arr[len(arr) - 1]`. "
             "Why will a loop condition of `while low < high` fail to check the last remaining element?"
@@ -82,6 +104,17 @@ FROM employees
 -- Which clause filters individual rows before grouping?
 -- Which clause filters grouped results after aggregation?
 GROUP BY department_id;""",
+        options={
+            "A": "WHERE filters aggregated groups; HAVING filters raw table rows before grouping.",
+            "B": "WHERE filters individual rows before grouping; HAVING filters aggregated groups after GROUP BY.",
+            "C": "WHERE and HAVING are completely interchangeable in SQL standards.",
+            "D": "WHERE permits aggregate functions like COUNT(*); HAVING only filters scalar columns.",
+        },
+        correct_option="B",
+        explanation=(
+            "WHERE executes first to filter base table rows prior to grouping. "
+            "GROUP BY aggregates the remaining rows, and HAVING evaluates conditions on the aggregated groups."
+        ),
         follow_up_prompt=(
             "Can aggregate functions like `COUNT(*)` or `SUM(salary)` be placed inside a `WHERE` clause? "
             "Why does the SQL query execution engine require `HAVING` for aggregated conditions?"
@@ -106,6 +139,17 @@ GROUP BY department_id;""",
 
 # append_to(1) -> [1]
 # append_to(2) -> [1, 2]  <-- Unexpected persistence!""",
+        options={
+            "A": "Python creates a new list instance on every call, wasting heap memory; fix by using a tuple.",
+            "B": "Default arguments are evaluated once at definition time, sharing the list across calls; fix with target=None.",
+            "C": "Python raises a compile-time SyntaxError when a mutable literal is used as a default parameter.",
+            "D": "Mutable defaults cause variables to leak into global module scope; fix with global target.",
+        },
+        correct_option="B",
+        explanation=(
+            "Default parameter expressions are evaluated once when the function definition is executed. "
+            "The same list is reused across calls. The fix is `target=None` with `if target is None: target = []`."
+        ),
         follow_up_prompt=(
             "Default parameter values are evaluated once when the function is defined, not each time it is called. "
             "How does using `target=None` inside the signature resolve this shared-reference issue?"
@@ -131,6 +175,17 @@ def fib(n):
 # Memoized Fibonacci: O(n)
 memo = {}
 ...""",
+        options={
+            "A": "Greedy choice property and Divide-and-conquer; memoization sorts the problem space.",
+            "B": "Optimal substructure and Overlapping subproblems; memoization caches intermediate results.",
+            "C": "Disjoint subproblems and Heuristic pruning; memoization replaces recursion with threads.",
+            "D": "Linear time bounds and Polynomial storage; memoization compresses DAG nodes.",
+        },
+        correct_option="B",
+        explanation=(
+            "Dynamic Programming requires optimal substructure and overlapping subproblems. "
+            "Memoization caches subproblem outputs so each unique subproblem is computed only once."
+        ),
         follow_up_prompt=(
             "If a problem only has optimal substructure but NO overlapping subproblems (e.g. Merge Sort), "
             "does dynamic programming provide any performance benefit over standard divide-and-conquer?"
@@ -153,6 +208,17 @@ memo = {}
 # 0: Unvisited (White)
 # 1: Currently in recursion stack / Active path (Gray)
 # 2: Fully explored (Black)""",
+        options={
+            "A": "A 2-color visited set is sufficient; any visited node indicates a cycle.",
+            "B": "A 3-color model (White/Gray/Black) is required; a cycle is confirmed only by a Back Edge to a Gray node.",
+            "C": "Directed graph cycle detection requires Dijkstra's algorithm; DFS cannot detect cycles.",
+            "D": "A 4-color model is mandatory to account for undirected bridge edges.",
+        },
+        correct_option="B",
+        explanation=(
+            "In directed graphs, an already visited node may be reached via a cross edge without creating a cycle. "
+            "A 3-color model detects cycles by identifying Back Edges to nodes currently in the recursion stack (Gray)."
+        ),
         follow_up_prompt=(
             "What kind of graph edge indicates a cycle: a Tree edge, a Cross edge, or a Back edge to an ancestor "
             "currently in the active call stack?"
@@ -274,11 +340,26 @@ class InternetQAProvider:
             "Must clearly specify how edge cases are safely handled.",
         ]
 
+        options = {
+            "A": f"The concept relies on an unconstrained heuristic that ignores boundary conditions.",
+            "B": f"Correctly adheres to {topic_title} principles: preserves core invariants and safely handles edge cases.",
+            "C": f"Applies an inverted assumption where base checks or termination rules are bypassed.",
+            "D": f"Applies only to deprecated legacy systems and cannot be utilized in modern implementations.",
+        }
+
+        explanation = (
+            f"Adheres to core technical principles of {topic_title} as established in authoritative literature: "
+            f"{extract[:200]}..."
+        )
+
         return Question(
             concept_id=slug,
             topic_name=topic_title,
             prompt_text=prompt_text,
             code_context=code_context,
+            options=options,
+            correct_option="B",
+            explanation=explanation,
             follow_up_prompt=follow_up_prompt,
             rubric_criteria=rubric_criteria,
             source_url=source_url,

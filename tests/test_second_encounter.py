@@ -71,8 +71,11 @@ def test_two_encounter_progression_and_decay(temp_store):
     assert prior_info["last_outcome"] == "resolved_on_follow_up"
     assert prior_info["last_confidence"] == 3
 
-    # Student demonstrates mastery: answers correctly on first try with 5/5
-    step_answering(s2, "if len(numbers) == 0: return 0", self_rating=5)
+    # Student demonstrates mastery: answers correctly on first try with 5/5, then provides verified explanation
+    step_answering(s2, "B", self_rating=5)
+    step_checking(s2)
+    assert s2.state == State.WAITING_FOR_FOLLOWUP
+    step_followup(s2, "An empty list has length 0, so the recursive sum must return 0 as the additive identity.")
     step_checking(s2)
     assert s2.state == State.RECORDED
 

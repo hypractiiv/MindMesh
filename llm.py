@@ -74,16 +74,22 @@ class LLMEvaluator:
         if question:
             topic_name = question.topic_name or question.concept_id
             rubric_str = "\n".join(f"- {r}" for r in (question.rubric_criteria or []))
+            options_str = ""
+            if question.options:
+                options_str = "Multiple Choice Options:\n" + "\n".join(f"  {k}: {v}" for k, v in question.options.items()) + f"\nCorrect Option: {question.correct_option}\n\n"
             topic_info = (
                 f"Concept / Topic: {topic_name}\n"
                 f"Question Asked: {question.prompt_text}\n"
+                f"{options_str}"
                 f"Specific Rubric Criteria:\n{rubric_str}\n\n"
             )
         else:
             topic_info = "Concept / Topic: Recursion Base Case (List Summation)\n\n"
 
+        task_mode = "MCQ option choice" if (question and question.options and answer.attempt_number == 1) else "conceptual explanation / correction"
+
         return (
-            f"Evaluate the student's submitted answer for the following concept.\n\n"
+            f"Evaluate the student's submitted {task_mode} for the following concept.\n\n"
             f"{topic_info}"
             "=== UNTRUSTED STUDENT SUBMISSION DATA START ===\n"
             f"<STUDENT_ANSWER>\n{answer.student_answer}\n</STUDENT_ANSWER>\n"
@@ -98,6 +104,7 @@ class LLMEvaluator:
         answer: Answer,
         session_id: str,
         question: Optional[Question] = None,
+        is_explanation: bool = False,
     ) -> Verdict:
         """
         Evaluates a student's answer.
@@ -108,7 +115,7 @@ class LLMEvaluator:
 
         # In fake mode or if no API key is provided in auto mode, use deterministic rule evaluation
         if self.mode == "fake" or (self.mode == "auto" and not self.api_key):
-            verdict = self._evaluate_rule_based_dynamic(answer, question)
+            verdict = self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
             return verdict
 
         # Real LLM call via OpenRouter / OpenAI-compatible endpoint
@@ -116,12 +123,17 @@ class LLMEvaluator:
             return self._call_real_model(answer, question)
         except Exception as e:
             # Resilient fallback to rule-based if network/remote fails
-            verdict = self._evaluate_rule_based_dynamic(answer, question)
+            verdict = self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
             verdict.reasoning = f"[Fallback: {str(e)[:60]}] {verdict.reasoning or ''}"
             return verdict
 
-    def _evaluate_rule_based_dynamic(self, answer: Answer, question: Optional[Question]) -> Verdict:
-        """Deterministic evaluation for curated topics and fallback heuristics for custom topics."""
+    def _evaluate_rule_based_dynamic(
+        self,
+        answer: Answer,
+        question: Optional[Question],
+        is_explanation: bool = False,
+    ) -> Verdict:
+        """Deterministic evaluation for MCQs, explanations, curated topics and fallback heuristics."""
         concept_id = question.concept_id if question else "recursion_base_case"
         text = answer.student_answer.strip().lower()
 
@@ -134,6 +146,98 @@ class LLMEvaluator:
                 is_mismatch=(answer.self_rating >= 4),
             )
 
+        # 1. MCQ Option Evaluation (Attempt 1 with MCQ options defined)
+        if question and question.options and question.correct_option and answer.attempt_number == 1:
+            clean = answer.student_answer.strip().upper()
+            chosen_opt = None
+            for opt_key, opt_val in question.options.items():
+                if (
+                    clean == opt_key
+                    or clean.startswith(f"OPTION {opt_key}")
+                    or clean.startswith(f"{opt_key}:")
+                    or clean.startswith(f"{opt_key})")
+                    or clean.startswith(f"{opt_key} ")
+                    or clean == opt_val.strip().upper()
+                    or opt_val.strip().lower() in text
+                ):
+                    chosen_opt = opt_key
+                    break
+
+            if chosen_opt is not None:
+                if chosen_opt == question.correct_option:
+                    return Verdict(
+                        passed=True,
+                        reasoning=f"Correct MCQ option ({chosen_opt}) selected.",
+                    )
+                else:
+                    opt_desc = question.options.get(chosen_opt, chosen_opt)
+                    return Verdict(
+                        passed=False,
+                        objection=f"Option {chosen_opt} is incorrect: {opt_desc}.",
+                        reasoning=f"Student selected distractor option {chosen_opt}.",
+                        is_mismatch=(answer.self_rating >= 4),
+                    )
+
+        # 2. Explanation Evaluation (Attempt 2 when initial MCQ was correct)
+        if answer.attempt_number >= 2 and is_explanation:
+            if any(bad in text for bad in ["idk", "i don't know", "guess", "dunno", "no idea", "lucky guess"]):
+                return Verdict(
+                    passed=False,
+                    objection="Explanation indicates the initial option was a guess without conceptual understanding.",
+                    reasoning="Unsubstantiated guess rejected.",
+                    is_mismatch=(answer.self_rating >= 4),
+                )
+
+            if concept_id == "recursion_base_case":
+                mentions_zero = "0" in text or "zero" in text or "additive" in text
+                mentions_empty = any(k in text for k in ["empty", "base", "len", "none", "element", "stop", "identity"])
+                if mentions_zero and mentions_empty:
+                    return Verdict(
+                        passed=True,
+                        reasoning="Explanation correctly identifies empty list summation and additive identity 0.",
+                    )
+                elif len(text) >= 15:
+                    return Verdict(
+                        passed=True,
+                        reasoning="Explanation provides sufficient conceptual justification.",
+                    )
+                else:
+                    return Verdict(
+                        passed=False,
+                        objection="The explanation fails to specify why an empty list must sum to 0.",
+                        reasoning="Incomplete explanation.",
+                        is_mismatch=(answer.self_rating >= 4),
+                    )
+
+            elif concept_id == "binary_search_bounds":
+                has_key = any(k in text for k in ["<=", "equal", "boundary", "single", "overflow", "mid", "last", "element"])
+                if has_key and len(text) >= 12:
+                    return Verdict(
+                        passed=True,
+                        reasoning="Explanation correctly addresses boundary inclusivity and overflow protection.",
+                    )
+                return Verdict(
+                    passed=False,
+                    objection="Explanation does not explain why low <= high or midpoint arithmetic is needed.",
+                    reasoning="Incomplete explanation.",
+                    is_mismatch=(answer.self_rating >= 4),
+                )
+
+            else:
+                # Generic explanation check
+                if len(text) >= 15:
+                    return Verdict(
+                        passed=True,
+                        reasoning="Explanation sufficiently justifies the selected technical answer.",
+                    )
+                return Verdict(
+                    passed=False,
+                    objection=f"Explanation is too brief to substantiate understanding of {question.topic_name if question else 'the concept'}.",
+                    reasoning="Explanation insufficient.",
+                    is_mismatch=(answer.self_rating >= 4),
+                )
+
+        # 3. Direct Code / Free-Text Fallback (Backwards-compatibility when question has no options or direct test calls)
         if concept_id == "recursion_base_case":
             return evaluate_rule_based(answer.student_answer, answer.self_rating)
 

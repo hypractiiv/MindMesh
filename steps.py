@@ -97,25 +97,48 @@ def step_checking(
     active_evaluator = evaluator or get_evaluator()
     current_answer = session.answers[-1]
 
+    first_verdict = session.verdicts[0] if len(session.verdicts) > 0 else None
+    is_explanation = (len(session.answers) == 2 and first_verdict is not None and first_verdict.passed)
+
     verdict = active_evaluator.evaluate(
         current_answer,
         session_id=session.session_id,
         question=session.question,
+        is_explanation=is_explanation,
     )
     session.verdicts.append(verdict)
 
     next_state = session.determine_checking_exit(verdict)
 
     if next_state == State.WAITING_FOR_FOLLOWUP:
-        session.transition_to(
-            State.WAITING_FOR_FOLLOWUP,
-            "FOLLOWUP_REQUESTED",
-            {
-                "verdict": verdict.model_dump(),
-                "objection": verdict.objection,
-                "follow_up_prompt": session.question.follow_up_prompt if session.question else None,
-            },
-        )
+        if verdict.passed:
+            # First-try correct on MCQ! Ask for explanation
+            opt_letter = current_answer.student_answer
+            fu_prompt = (
+                f"Your selected option ({opt_letter}) is correct! "
+                "Multiple-choice answers can sometimes be guessed. "
+                "To verify your conceptual understanding: Please explain WHY this option is correct "
+                "and why the alternatives are incorrect."
+            )
+            session.transition_to(
+                State.WAITING_FOR_FOLLOWUP,
+                "EXPLANATION_REQUESTED",
+                {
+                    "verdict": verdict.model_dump(),
+                    "follow_up_prompt": fu_prompt,
+                    "reason": "first_try_correct_explanation",
+                },
+            )
+        else:
+            session.transition_to(
+                State.WAITING_FOR_FOLLOWUP,
+                "FOLLOWUP_REQUESTED",
+                {
+                    "verdict": verdict.model_dump(),
+                    "objection": verdict.objection,
+                    "follow_up_prompt": session.question.follow_up_prompt if session.question else None,
+                },
+            )
     else:
         # Transitioning to RECORDED
         step_record(session)
@@ -130,7 +153,7 @@ def step_followup(
 ) -> Answer:
     """
     Executes Waiting for follow-up exit:
-    Student provides a follow-up clarification.
+    Student provides a follow-up clarification or explanation.
     Transitions back to Checking for second evaluation.
     """
     rating = self_rating or (session.answers[0].self_rating if session.answers else 3)
@@ -157,6 +180,7 @@ def step_record(session: FlowSession) -> ConceptRecord:
     """
     initial_answer = session.answers[0] if session.answers else None
     latest_verdict = session.verdicts[-1] if session.verdicts else None
+    notes_extra = ""
 
     # Determine outcome & confidence
     if len(session.answers) == 1:
@@ -167,13 +191,28 @@ def step_record(session: FlowSession) -> ConceptRecord:
             outcome = Outcome.UNRESOLVED
             confidence = min(initial_answer.self_rating if initial_answer else 1, 2)
     else:
-        # Follow-up round occurred
-        if latest_verdict and latest_verdict.passed:
-            outcome = Outcome.RESOLVED_ON_FOLLOW_UP
-            confidence = 3  # Matches Beat 6 spec: "Record shows confidence 3 and 'resolved on follow-up'"
+        # Follow-up or explanation round occurred
+        first_verdict = session.verdicts[0] if len(session.verdicts) > 0 else None
+        if first_verdict and first_verdict.passed:
+            # Initial MCQ was correct, now checking explanation
+            if latest_verdict and latest_verdict.passed:
+                outcome = Outcome.FIRST_TRY_CORRECT
+                confidence = initial_answer.self_rating if initial_answer else 5
+                notes_extra = "Verified understanding with sound explanation."
+            else:
+                outcome = Outcome.UNRESOLVED
+                confidence = 2
+                notes_extra = "Correct MCQ option selected, but explanation was unconvincing or incorrect."
         else:
-            outcome = Outcome.UNRESOLVED
-            confidence = 2
+            # Initial MCQ was wrong
+            if latest_verdict and latest_verdict.passed:
+                outcome = Outcome.RESOLVED_ON_FOLLOW_UP
+                confidence = 3  # Matches Beat 6 spec
+                notes_extra = "Resolved misconception on follow-up."
+            else:
+                outcome = Outcome.UNRESOLVED
+                confidence = 2
+                notes_extra = "Unresolved after follow-up."
 
     concept_id = session.question.concept_id if session.question else "recursion_base_case"
     next_review = calculate_next_review(outcome=outcome, confidence=confidence)
@@ -186,7 +225,7 @@ def step_record(session: FlowSession) -> ConceptRecord:
         outcome=outcome,
         attempts_count=len(session.answers),
         next_review_at=next_review,
-        notes=f"Completed with {len(session.answers)} attempt(s). Verdict: {'Passed' if latest_verdict and latest_verdict.passed else 'Failed'}",
+        notes=f"Completed with {len(session.answers)} attempt(s). Verdict: {'Passed' if latest_verdict and latest_verdict.passed else 'Failed'}. {notes_extra}".strip(),
     )
 
     session.store.save_concept_record(record)

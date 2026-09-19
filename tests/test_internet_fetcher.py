@@ -97,15 +97,20 @@ def test_binary_search_mismatch_and_recovery(temp_store):
 def test_multi_topic_persistence_isolation(temp_store):
     """Verify that multiple different topics persist independently in SQLite."""
     # Session 1: Recursion
+    # Session 1: Recursion
     s1 = FlowSession(session_id="multi-sess-1", store=temp_store)
     step_prompting(s1, topic="recursion_base_case")
-    step_answering(s1, "if not numbers: return 0", self_rating=5)
+    step_answering(s1, "B", self_rating=5)
+    step_checking(s1)
+    step_followup(s1, "Empty list has 0 elements so returns 0 as additive identity.")
     step_checking(s1)
 
     # Session 2: SQL
     s2 = FlowSession(session_id="multi-sess-2", store=temp_store)
     step_prompting(s2, topic="sql_where_vs_having")
-    step_answering(s2, "WHERE filters rows before GROUP BY; HAVING filters aggregate groups after", self_rating=5)
+    step_answering(s2, "B", self_rating=5)
+    step_checking(s2)
+    step_followup(s2, "WHERE filters rows before GROUP BY; HAVING filters aggregate groups after.")
     step_checking(s2)
 
     # Query by concept
