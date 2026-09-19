@@ -29,6 +29,7 @@ from steps import (
     step_checking,
     step_followup,
     step_skip,
+)
 try:
     from store import MindMeshStore, get_database_store
 except (ImportError, AttributeError):
