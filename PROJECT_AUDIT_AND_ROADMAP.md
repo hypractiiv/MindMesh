@@ -221,18 +221,83 @@ To advance MindMesh from an agentic hackathon prototype to an industry-grade lea
 
 ---
 
-## 5. Verification Commands & Setup
+## 5. Verification Commands & Setup (Windows PowerShell)
 
-```bash
+### 5.1 Environment Activation & Direct Execution
+```powershell
+# Optional: Permit script execution in the current PowerShell session if restricted
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+
 # Activate virtual environment
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 
-# Verify syntax & compilation
-python -m py_compile app.py store.py fetcher.py flow.py llm.py
-
-# Run complete 60-test verification suite
-pytest tests/ -v
-
-# Launch the Streamlit interface
-streamlit run app.py
+# Verify Python version & environment path
+Get-Command python | Select-Object Source
+python --version
 ```
+
+### 5.2 Syntax Verification & Automated Testing
+```powershell
+# 1. Compile all Python files to verify syntax
+.\.venv\Scripts\python.exe -m py_compile app.py store.py fetcher.py flow.py llm.py steps.py decay.py
+
+# 2. Run the complete 60-test automated verification suite
+.\.venv\Scripts\pytest.exe tests/ -v
+
+# 3. Run specific test groups
+.\.venv\Scripts\pytest.exe tests/test_postgres_store.py -v
+.\.venv\Scripts\pytest.exe tests/test_dynamic_topic_variants.py -v
+.\.venv\Scripts\pytest.exe tests/test_flow_reachability.py -v
+```
+
+### 5.3 Launching the Application
+```powershell
+# Run the Streamlit web interface
+.\.venv\Scripts\streamlit.exe run app.py
+
+# Alternatively, run via python module
+python -m streamlit run app.py
+
+# Run in headless mode on a custom port
+streamlit run app.py --server.port 8501 --server.headless true
+
+# Run terminal CLI interactive mode
+.\.venv\Scripts\python.exe cli.py
+```
+
+### 5.4 Environment Variables in PowerShell
+```powershell
+# Set or inspect environment variables for the current PowerShell session
+$env:DATABASE_URL = "postgresql://neondb_owner:npg_...@ep-blue-wildflower-b4f5uwhh-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require"
+$env:GEMINI_API_KEY = "AIzaSy..."
+
+# View current environment variable values
+$env:DATABASE_URL
+$env:GEMINI_API_KEY
+```
+
+### 5.5 Port Troubleshooting & Process Management
+```powershell
+# Check which process is listening on Streamlit port 8501
+Get-NetTCPConnection -LocalPort 8501 -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort, OwningProcess, State
+
+# Inspect running Python or Streamlit processes
+Get-Process | Where-Object { $_.ProcessName -match "python|streamlit" } | Select-Object Id, ProcessName, CPU, WorkingSet64
+
+# Force-stop all lingering Streamlit / Python processes if port 8501 is stuck
+Get-Process | Where-Object { $_.ProcessName -match "streamlit" } | Stop-Process -Force
+```
+
+### 5.6 Docker Compose (Local PostgreSQL)
+```powershell
+# Start local PostgreSQL container in background
+docker compose up -d
+
+# Check container status & logs
+docker compose ps
+docker compose logs -f
+
+# Stop local container
+docker compose down
+```
+
