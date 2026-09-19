@@ -165,6 +165,8 @@ def reset_session(new_topic: str | None = None):
     st.session_state["rating_slider"] = 4
     if "mcq_radio" in st.session_state:
         del st.session_state["mcq_radio"]
+    if "fu_mcq_radio" in st.session_state:
+        del st.session_state["fu_mcq_radio"]
     st.rerun()
 
 
@@ -185,6 +187,12 @@ def apply_mcq_preset(option_key: str, rating_val: int):
 def apply_fu_preset(fu_answer_text: str):
     """Directly populates the follow-up text area widget state and reruns."""
     st.session_state["fu_area"] = fu_answer_text
+    st.rerun()
+
+
+def apply_fu_mcq_preset(option_key: str):
+    """Directly selects the follow-up MCQ option radio button and reruns."""
+    st.session_state["fu_mcq_radio"] = option_key
     st.rerun()
 
 
@@ -556,40 +564,74 @@ elif flow.state == State.WAITING_FOR_FOLLOWUP:
         )
 
         with st.container(border=True):
-            st.subheader("🎯 Agent Targeted Follow-up Question")
-            st.info(flow.question.follow_up_prompt if flow.question else "Please clarify your answer.")
+            st.subheader("🎯 Agent Targeted Follow-up: Select Corrected Option")
+            if flow.question and flow.question.follow_up_prompt:
+                st.info(f"**Guidance:** {flow.question.follow_up_prompt}")
 
-            col_fu_preset = st.columns(2)
-            if flow.question.concept_id == "recursion_base_case":
+            if flow.question and flow.question.options:
+                opt_keys = list(flow.question.options.keys())
+                correct_opt = flow.question.correct_option or "B"
+
+                col_fu_preset = st.columns(2)
                 with col_fu_preset[0]:
-                    if st.button("Preset: Corrected Follow-up (Option B / return 0)", use_container_width=True):
-                        apply_fu_preset("if not numbers: return 0 (empty list returns additive identity 0)")
-            elif flow.question.concept_id == "binary_search_bounds":
-                with col_fu_preset[0]:
-                    if st.button("Preset: Corrected Follow-up (low <= high)", use_container_width=True):
-                        apply_fu_preset("while low <= high: mid = low + (high - low) // 2")
+                    if st.button(f"Preset: Correct Option {correct_opt}", use_container_width=True):
+                        apply_fu_mcq_preset(correct_opt)
 
-            fu_text = st.text_area(
-                "Your corrected answer / clarification:",
-                placeholder="Type your corrected explanation or choice...",
-                key="fu_area",
-            )
+                default_idx = (
+                    opt_keys.index(st.session_state["fu_mcq_radio"])
+                    if st.session_state.get("fu_mcq_radio") in opt_keys
+                    else 0
+                )
+                fu_selected_opt = st.radio(
+                    "Choose your corrected option (no written explanation needed):",
+                    options=opt_keys,
+                    format_func=lambda k: f"**Option {k}:** {flow.question.options[k]}",
+                    index=default_idx,
+                    key="fu_mcq_radio",
+                )
 
-            col_fu_sub, col_fu_skip = st.columns([4, 1])
-            with col_fu_sub:
-                if st.button("Submit Follow-up", type="primary", use_container_width=True):
-                    if not fu_text.strip():
-                        st.error("Please enter a corrected answer.")
-                    else:
-                        step_followup(flow, fu_text.strip())
+                col_fu_sub, col_fu_skip = st.columns([4, 1])
+                with col_fu_sub:
+                    if st.button("Submit Corrected Option", type="primary", use_container_width=True):
+                        step_followup(flow, fu_selected_opt)
                         step_checking(flow)
                         st.rerun()
 
-            with col_fu_skip:
-                if st.button("Skip Question", use_container_width=True):
-                    step_skip(flow, reason="Skipped during follow-up")
-                    st.rerun()
-                st.rerun()
+                with col_fu_skip:
+                    if st.button("Skip Question", use_container_width=True):
+                        step_skip(flow, reason="Skipped during follow-up")
+                        st.rerun()
+            else:
+                col_fu_preset = st.columns(2)
+                if flow.question and flow.question.concept_id == "recursion_base_case":
+                    with col_fu_preset[0]:
+                        if st.button("Preset: Corrected Follow-up (return 0)", use_container_width=True):
+                            apply_fu_preset("if not numbers: return 0 (empty list returns additive identity 0)")
+                elif flow.question and flow.question.concept_id == "binary_search_bounds":
+                    with col_fu_preset[0]:
+                        if st.button("Preset: Corrected Follow-up (low <= high)", use_container_width=True):
+                            apply_fu_preset("while low <= high: mid = low + (high - low) // 2")
+
+                fu_text = st.text_area(
+                    "Your corrected answer / clarification:",
+                    placeholder="Type your corrected answer or choice...",
+                    key="fu_area",
+                )
+
+                col_fu_sub, col_fu_skip = st.columns([4, 1])
+                with col_fu_sub:
+                    if st.button("Submit Follow-up", type="primary", use_container_width=True):
+                        if not fu_text.strip():
+                            st.error("Please enter a corrected answer.")
+                        else:
+                            step_followup(flow, fu_text.strip())
+                            step_checking(flow)
+                            st.rerun()
+
+                with col_fu_skip:
+                    if st.button("Skip Question", use_container_width=True):
+                        step_skip(flow, reason="Skipped during follow-up")
+                        st.rerun()
 
 # State 3: RECORDED (Resolved)
 elif flow.state == State.RECORDED:

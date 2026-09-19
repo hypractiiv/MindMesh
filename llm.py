@@ -237,7 +237,40 @@ class LLMEvaluator:
                     is_mismatch=(answer.self_rating >= 4),
                 )
 
-        # 3. Direct Code / Free-Text Fallback (Backwards-compatibility when question has no options or direct test calls)
+        # 3. Follow-up Option Selection Evaluation (Attempt 2 when initial was wrong)
+        if answer.attempt_number >= 2 and not is_explanation:
+            if question and question.options and question.correct_option:
+                clean = answer.student_answer.strip().upper()
+                chosen_opt = None
+                for opt_key, opt_val in question.options.items():
+                    if (
+                        clean == opt_key
+                        or clean.startswith(f"OPTION {opt_key}")
+                        or clean.startswith(f"{opt_key}:")
+                        or clean.startswith(f"{opt_key})")
+                        or clean.startswith(f"{opt_key} ")
+                        or clean == opt_val.strip().upper()
+                        or opt_val.strip().lower() in text
+                    ):
+                        chosen_opt = opt_key
+                        break
+
+                if chosen_opt is not None:
+                    if chosen_opt == question.correct_option:
+                        return Verdict(
+                            passed=True,
+                            reasoning=f"Correct option ({chosen_opt}) selected on follow-up.",
+                        )
+                    else:
+                        opt_desc = question.options.get(chosen_opt, chosen_opt)
+                        return Verdict(
+                            passed=False,
+                            objection=f"Option {chosen_opt} is still incorrect: {opt_desc}.",
+                            reasoning=f"Student selected incorrect option {chosen_opt} on follow-up.",
+                            is_mismatch=False,
+                        )
+
+        # 4. Direct Code / Free-Text Fallback (Backwards-compatibility when question has no options or direct test calls)
         if concept_id == "recursion_base_case":
             return evaluate_rule_based(answer.student_answer, answer.self_rating)
 

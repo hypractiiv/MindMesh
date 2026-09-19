@@ -129,6 +129,32 @@ def test_mcq_wrong_option_mismatch(temp_store):
     assert record.confidence == 3
 
 
+def test_mcq_wrong_option_corrected_with_option_letter_no_explanation(temp_store):
+    """
+    When an answer is wrong on attempt 1, the student enters follow-up.
+    In follow-up, there is no need for text explanation:
+    Submitting the corrected option letter 'B' directly resolves the question.
+    """
+    session = FlowSession(store=temp_store, user_id="student_no_exp_needed")
+    step_prompting(session, topic="recursion_base_case")
+
+    # Attempt 1: Picks distractor Option C with high confidence
+    step_answering(session, "C", self_rating=4)
+    step_checking(session)
+    assert session.state == State.WAITING_FOR_FOLLOWUP
+
+    # Attempt 2: Picks correct Option B with NO text explanation
+    step_followup(session, "B")
+    step_checking(session)
+
+    assert session.state == State.RECORDED
+    record = temp_store.get_latest_concept_record("recursion_base_case", user_id="student_no_exp_needed")
+    assert record is not None
+    assert record.outcome == Outcome.RESOLVED_ON_FOLLOW_UP
+    assert record.confidence == 3
+    assert "Resolved misconception on follow-up" in record.notes
+
+
 def test_curated_topics_all_have_four_options():
     """Every topic in the curated catalog must have 4 MCQ options, a correct_option, and an explanation."""
     for key, q in CURATED_TOPICS.items():
