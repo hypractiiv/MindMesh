@@ -66,10 +66,6 @@ class MindMeshStore:
                     timestamp TEXT NOT NULL
                 );
             """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_session_events_session_id 
-                ON session_events(session_id);
-            """)
 
             # 3. Concept records table
             cursor.execute("""
@@ -86,12 +82,8 @@ class MindMeshStore:
                     notes TEXT
                 );
             """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_concept_records_concept_user 
-                ON concept_records(concept_id, user_id);
-            """)
 
-            # Check and perform migrations if upgrading existing databases
+            # Perform column migrations on existing tables BEFORE creating indexes on them
             cursor.execute("PRAGMA table_info(session_events);")
             columns = [row["name"] for row in cursor.fetchall()]
             if "user_id" not in columns:
@@ -101,6 +93,16 @@ class MindMeshStore:
             rec_columns = [row["name"] for row in cursor.fetchall()]
             if "user_id" not in rec_columns:
                 cursor.execute("ALTER TABLE concept_records ADD COLUMN user_id TEXT DEFAULT 'default_student';")
+
+            # Indexes (now guaranteed to have all referenced columns present)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_session_events_session_id 
+                ON session_events(session_id);
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_concept_records_concept_user 
+                ON concept_records(concept_id, user_id);
+            """)
 
             conn.commit()
 
