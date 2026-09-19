@@ -34,20 +34,13 @@ from steps import (
     step_followup,
     step_skip,
 )
+import importlib
+import store
 try:
-    from store import MindMeshStore, get_database_store, get_last_db_error
-except (ImportError, AttributeError):
-    import importlib
-    import store
     importlib.reload(store)
-    try:
-        from store import MindMeshStore, get_database_store, get_last_db_error
-    except (ImportError, AttributeError):
-        from store import MindMeshStore
-        def get_database_store(db_url: Any = None) -> Any:
-            return MindMeshStore()
-        def get_last_db_error() -> Any:
-            return None
+except Exception:
+    pass
+from store import MindMeshStore, get_database_store, get_last_db_error
 
 
 st.set_page_config(
@@ -146,21 +139,40 @@ def get_cached_user_records(store: Any, username: str) -> List[Any]:
 def get_cached_concept_records(store: Any, concept_id: str, user_id: Optional[str] = None) -> List[Any]:
     key = f"cache_db_concept_recs_{concept_id}_{user_id}"
     if key not in st.session_state:
-        st.session_state[key] = store.get_concept_records(concept_id, user_id=user_id)
+        try:
+            st.session_state[key] = store.get_concept_records(concept_id, user_id=user_id)
+        except Exception:
+            return []
     return st.session_state[key]
 
 
 def get_cached_latest_concept_record(store: Any, concept_id: str, user_id: Optional[str] = None) -> Optional[Any]:
     key = f"cache_db_latest_rec_{concept_id}_{user_id}"
     if key not in st.session_state:
-        st.session_state[key] = store.get_latest_concept_record(concept_id, user_id=user_id)
+        try:
+            st.session_state[key] = store.get_latest_concept_record(concept_id, user_id=user_id)
+        except Exception:
+            return None
     return st.session_state[key]
 
 
 def get_cached_session_events(store: Any, session_id: str) -> List[Any]:
     key = f"cache_db_session_events_{session_id}"
     if key not in st.session_state:
-        st.session_state[key] = store.get_session_events(session_id)
+        try:
+            st.session_state[key] = store.get_session_events(session_id)
+        except Exception:
+            return []
+    return st.session_state[key]
+
+
+def get_cached_all_session_events(store: Any, user_id: Optional[str] = None) -> List[Any]:
+    key = f"cache_db_all_events_{user_id}"
+    if key not in st.session_state:
+        try:
+            st.session_state[key] = store.get_all_session_events(user_id=user_id)
+        except Exception:
+            return []
     return st.session_state[key]
 
 
@@ -194,9 +206,14 @@ def get_session() -> FlowSession:
         cur_topic = st.session_state.current_topic
         slug = provider._slugify(cur_topic)
 
-        # Retrieve prior records and previous question texts for anti-repetition
-        prior_records = store.get_concept_records(slug, user_id=user.username)
-        prior_events = store.get_all_session_events(user_id=user.username)
+        # Retrieve prior records and previous question texts for anti-repetition safely
+        try:
+            prior_records = get_cached_concept_records(store, slug, user_id=user.username)
+            prior_events = get_cached_all_session_events(store, user_id=user.username)
+        except Exception:
+            prior_records = []
+            prior_events = []
+
         prior_questions = [
             ev.payload["question"]["prompt_text"]
             for ev in prior_events

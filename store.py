@@ -495,15 +495,21 @@ class MindMeshStore:
 
 
 def _retry_on_disconnect(func):
-    """Decorator that retries database operations once if the remote SSL connection was terminated."""
+    """Decorator that retries database operations up to 3 times if the remote SSL connection was terminated."""
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         import psycopg2
-        try:
-            return func(self, *args, **kwargs)
-        except (psycopg2.OperationalError, psycopg2.InterfaceError):
-            # Stale connection broke during query; retry once with a freshly verified connection
-            return func(self, *args, **kwargs)
+        import time
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                return func(self, *args, **kwargs)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                last_err = e
+                time.sleep(0.2 * (attempt + 1))
+        if last_err is not None:
+            raise last_err
     return wrapper
 
 
@@ -518,7 +524,7 @@ class PostgresStore:
         if not self.db_url:
             raise ValueError("DATABASE_URL must be provided for PostgresStore.")
         self._pool = ThreadedConnectionPool(
-            minconn=1,
+            minconn=0,
             maxconn=10,
             dsn=self.db_url,
             keepalives=1,
@@ -530,9 +536,10 @@ class PostgresStore:
 
     def _acquire_connection(self) -> Any:
         """Acquires a healthy PostgreSQL connection, purging stale or dropped connections."""
-        import psycopg2
+        import time
+        from psycopg2.pool import ThreadedConnectionPool
 
-        for attempt in range(3):
+        for attempt in range(5):
             conn = None
             try:
                 conn = self._pool.getconn()
@@ -544,20 +551,20 @@ class PostgresStore:
                 with conn.cursor() as ping_cur:
                     ping_cur.execute("SELECT 1")
                 return conn
-            except (psycopg2.OperationalError, psycopg2.InterfaceError, psycopg2.DatabaseError):
+            except Exception:
                 if conn is not None:
                     try:
                         self._pool.putconn(conn, close=True)
                     except Exception:
                         pass
-                if attempt == 2:
+                if attempt >= 2:
                     try:
                         self._pool.closeall()
                     except Exception:
                         pass
-                    from psycopg2.pool import ThreadedConnectionPool
+                    time.sleep(0.3)
                     self._pool = ThreadedConnectionPool(
-                        minconn=1,
+                        minconn=0,
                         maxconn=10,
                         dsn=self.db_url,
                         keepalives=1,
@@ -565,7 +572,6 @@ class PostgresStore:
                         keepalives_interval=10,
                         keepalives_count=5,
                     )
-                    return self._pool.getconn()
         return self._pool.getconn()
 
     @contextlib.contextmanager
