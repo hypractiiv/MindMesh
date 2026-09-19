@@ -7,6 +7,7 @@ Owns: SQLite schema, event append/read, concept records, session resumption.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import secrets
@@ -493,6 +494,19 @@ class MindMeshStore:
         return "SQLite"
 
 
+def _retry_on_disconnect(func):
+    """Decorator that retries database operations once if the remote SSL connection was terminated."""
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        import psycopg2
+        try:
+            return func(self, *args, **kwargs)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            # Stale connection broke during query; retry once with a freshly verified connection
+            return func(self, *args, **kwargs)
+    return wrapper
+
+
 class PostgresStore:
     """PostgreSQL storage engine with connection pooling, native JSONB, and upsert handling."""
 
@@ -503,25 +517,76 @@ class PostgresStore:
         self.db_url = db_url or os.getenv("DATABASE_URL")
         if not self.db_url:
             raise ValueError("DATABASE_URL must be provided for PostgresStore.")
-        self._pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=self.db_url)
+        self._pool = ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            dsn=self.db_url,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
         self.init_db()
+
+    def _acquire_connection(self) -> Any:
+        """Acquires a healthy PostgreSQL connection, purging stale or dropped connections."""
+        import psycopg2
+
+        for attempt in range(3):
+            conn = None
+            try:
+                conn = self._pool.getconn()
+                if conn.closed:
+                    self._pool.putconn(conn, close=True)
+                    continue
+
+                # Pre-ping to verify the SSL/TCP socket is responsive
+                with conn.cursor() as ping_cur:
+                    ping_cur.execute("SELECT 1")
+                return conn
+            except (psycopg2.OperationalError, psycopg2.InterfaceError, psycopg2.DatabaseError):
+                if conn is not None:
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                if attempt == 2:
+                    try:
+                        self._pool.closeall()
+                    except Exception:
+                        pass
+                    from psycopg2.pool import ThreadedConnectionPool
+                    self._pool = ThreadedConnectionPool(
+                        minconn=1,
+                        maxconn=10,
+                        dsn=self.db_url,
+                        keepalives=1,
+                        keepalives_idle=30,
+                        keepalives_interval=10,
+                        keepalives_count=5,
+                    )
+                    return self._pool.getconn()
+        return self._pool.getconn()
 
     @contextlib.contextmanager
     def _get_connection(self) -> Generator[Any, None, None]:
+        import psycopg2
         from psycopg2.extras import RealDictCursor
-        conn = None
+
+        conn = self._acquire_connection()
+        is_broken = False
         try:
-            conn = self._pool.getconn()
-            if conn.closed:
-                try:
-                    self._pool.putconn(conn, close=True)
-                except Exception:
-                    pass
-                conn = self._pool.getconn()
             conn.cursor_factory = RealDictCursor
             yield conn
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            is_broken = True
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
         except Exception:
-            if conn is not None and not conn.closed:
+            if not conn.closed:
                 try:
                     conn.rollback()
                 except Exception:
@@ -529,7 +594,13 @@ class PostgresStore:
             raise
         finally:
             if conn is not None:
-                self._pool.putconn(conn)
+                if is_broken or conn.closed:
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                else:
+                    self._pool.putconn(conn)
 
     def close(self) -> None:
         """Closes all connections in the pool."""
@@ -601,6 +672,7 @@ class PostgresStore:
     def _hash_password(password: str, salt: str) -> str:
         return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
+    @_retry_on_disconnect
     def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
         clean_user = username.strip().lower()
         if not clean_user or len(clean_user) < 3 or len(password) < 3:
@@ -625,6 +697,7 @@ class PostgresStore:
         except Exception:
             return None
 
+    @_retry_on_disconnect
     def authenticate_user(self, username: str, password: str) -> Optional[User]:
         clean_user = username.strip().lower()
         with self._get_connection() as conn:
@@ -644,6 +717,7 @@ class PostgresStore:
             return User(username=row["username"], display_name=row["display_name"], created_at=ts)
         return None
 
+    @_retry_on_disconnect
     def get_user(self, username: str) -> Optional[User]:
         clean_user = username.strip().lower()
         with self._get_connection() as conn:
@@ -656,6 +730,7 @@ class PostgresStore:
             return User(username=row["username"], display_name=row["display_name"], created_at=ts)
         return None
 
+    @_retry_on_disconnect
     def list_users(self) -> List[User]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -671,6 +746,7 @@ class PostgresStore:
             for r in rows
         ]
 
+    @_retry_on_disconnect
     def append_event(
         self,
         session_id: str,
@@ -709,6 +785,7 @@ class PostgresStore:
             timestamp=ts,
         )
 
+    @_retry_on_disconnect
     def get_session_events(self, session_id: str) -> List[SessionEvent]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -742,6 +819,7 @@ class PostgresStore:
             )
         return events
 
+    @_retry_on_disconnect
     def get_all_session_events(self, user_id: Optional[str] = None) -> List[SessionEvent]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -784,6 +862,7 @@ class PostgresStore:
             )
         return events
 
+    @_retry_on_disconnect
     def save_concept_record(self, record: ConceptRecord) -> None:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -814,6 +893,7 @@ class PostgresStore:
                 )
                 conn.commit()
 
+    @_retry_on_disconnect
     def get_concept_records(self, concept_id: str, user_id: Optional[str] = None) -> List[ConceptRecord]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -858,6 +938,7 @@ class PostgresStore:
             )
         return records
 
+    @_retry_on_disconnect
     def get_latest_concept_record(self, concept_id: str, user_id: Optional[str] = None) -> Optional[ConceptRecord]:
         query = (
             "SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes "
@@ -891,6 +972,7 @@ class PostgresStore:
             notes=r.get("notes"),
         )
 
+    @_retry_on_disconnect
     def get_user_records(self, user_id: str) -> List[ConceptRecord]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -924,6 +1006,7 @@ class PostgresStore:
             )
         return records
 
+    @_retry_on_disconnect
     def resume_session(self, session_id: str) -> Dict[str, Any]:
         events = self.get_session_events(session_id)
         if not events:
