@@ -56,6 +56,7 @@ class Question(BaseModel):
     follow_up_prompt: Optional[str] = None
     rubric_criteria: Optional[List[str]] = None
     source_url: Optional[str] = None
+    quiz_source: Optional[str] = None
 
 
 class User(BaseModel):

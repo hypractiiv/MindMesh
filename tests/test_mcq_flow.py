@@ -174,3 +174,69 @@ def test_live_fetcher_synthesizes_mcq():
     assert set(q.options.keys()) == {"A", "B", "C", "D"}
     assert q.correct_option == "B"
     assert q.explanation is not None
+    assert q.quiz_source is not None
+
+
+def test_curated_topics_have_authentic_quiz_sources():
+    """All curated questions must reference authentic quiz websites like GeeksforGeeks, Sanfoundry, LeetCode, etc."""
+    recognized_platforms = ["GeeksforGeeks", "Sanfoundry", "LeetCode", "Real Python", "W3Schools", "MDN"]
+    assert len(CURATED_TOPICS) >= 15
+
+    for key, q in CURATED_TOPICS.items():
+        assert q.quiz_source is not None, f"Topic {key} missing quiz_source"
+        assert any(plat in q.quiz_source for plat in recognized_platforms), (
+            f"Topic {key} quiz_source '{q.quiz_source}' must reference a recognized platform ({recognized_platforms})"
+        )
+        assert q.source_url is not None, f"Topic {key} missing source_url"
+
+
+def test_quicksort_quiz_mcq_flow(temp_store):
+    """Test full MCQ follow-up loop on the new QuickSort quiz question."""
+    session = FlowSession(store=temp_store, user_id="student_quicksort")
+    step_prompting(session, topic="quicksort_pivot_complexity")
+
+    assert "GeeksforGeeks" in session.question.quiz_source
+    assert session.question.correct_option == "B"
+
+    # Attempt 1: Wrong option A with high confidence
+    step_answering(session, "A", self_rating=5)
+    step_checking(session)
+    assert session.state == State.WAITING_FOR_FOLLOWUP
+
+    # Attempt 2: Selects corrected option B
+    step_followup(session, "B")
+    step_checking(session)
+
+    assert session.state == State.RECORDED
+    rec = temp_store.get_latest_concept_record("quicksort_pivot_complexity", user_id="student_quicksort")
+    assert rec is not None
+    assert rec.outcome == Outcome.RESOLVED_ON_FOLLOW_UP
+    assert rec.confidence == 3
+
+
+def test_os_deadlock_quiz_first_try_correct_explanation(temp_store):
+    """Test Deadlock quiz question with correct first attempt and verified explanation."""
+    session = FlowSession(store=temp_store, user_id="student_os")
+    step_prompting(session, topic="os_deadlock_conditions")
+
+    assert "Sanfoundry" in session.question.quiz_source or "GeeksforGeeks" in session.question.quiz_source
+
+    # Attempt 1: Picks correct option B (Preemption is not a deadlock condition)
+    step_answering(session, "B", self_rating=5)
+    step_checking(session)
+    assert session.state == State.WAITING_FOR_FOLLOWUP
+
+    # Attempt 2: Submits sound explanation
+    step_followup(
+        session,
+        "The necessary Coffman condition is No Preemption. Preemptive resource allocation is actually a "
+        "deadlock recovery technique used by operating systems to break deadlocks."
+    )
+    step_checking(session)
+
+    assert session.state == State.RECORDED
+    rec = temp_store.get_latest_concept_record("os_deadlock_conditions", user_id="student_os")
+    assert rec is not None
+    assert rec.outcome == Outcome.FIRST_TRY_CORRECT
+    assert rec.confidence == 5
+

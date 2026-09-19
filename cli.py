@@ -179,26 +179,19 @@ def run_interactive(topic: str | None = None, user_id: str | None = None) -> Non
         store.create_user(user_id, user_id.capitalize(), "pass123")
 
     if not topic:
-        print_banner("SELECT TOPIC")
-        print("1. Recursion: Base Case in List Summation")
-        print("2. Binary Search: Midpoint & Boundary Conditions")
-        print("3. SQL: WHERE vs HAVING Clause Filtering")
-        print("4. Python: Mutable Default Arguments Bug")
-        print("5. Dynamic Programming: Memoization vs Tabulation")
-        print("6. Graph Algorithms: Directed Graph Cycle Detection")
-        print("7. Search Internet for Custom Topic")
+        print_banner("SELECT AUTHENTIC CS QUIZ TOPIC")
+        provider = InternetQAProvider()
+        curated_list = provider.list_curated_topics()
+        choice_map = {}
+        for idx, item in enumerate(curated_list, 1):
+            print(f"{idx}. {item['topic_name']} [{item.get('quiz_source', 'Quiz')}]")
+            choice_map[str(idx)] = item["concept_id"]
 
-        choice = input("\nEnter choice (1-7, default 1): ").strip()
-        choice_map = {
-            "1": "recursion_base_case",
-            "2": "binary_search_bounds",
-            "3": "sql_where_vs_having",
-            "4": "python_mutable_defaults",
-            "5": "dp_memoization_base",
-            "6": "graph_cycle_detection",
-        }
+        custom_idx = len(curated_list) + 1
+        print(f"{custom_idx}. Search Web for Any Other Topic")
 
-        if choice == "7":
+        choice = input(f"\nEnter choice (1-{custom_idx}, default 1): ").strip()
+        if choice == str(custom_idx):
             topic = input("Enter any CS topic to search the web for: ").strip()
         else:
             topic = choice_map.get(choice, "recursion_base_case")
@@ -209,8 +202,10 @@ def run_interactive(topic: str | None = None, user_id: str | None = None) -> Non
 
     q = session.question
     print_banner(f"STUDENT: {user_id} | TOPIC: {q.topic_name or q.concept_id}")
+    if q.quiz_source:
+        print(f"Quiz Reference: {q.quiz_source}")
     if q.source_url:
-        print(f"Internet Source: {q.source_url}\n")
+        print(f"Source URL: {q.source_url}\n")
 
     # Check prior history for this student
     records = store.get_concept_records(q.concept_id, user_id=user_id)

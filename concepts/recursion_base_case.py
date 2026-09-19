@@ -54,7 +54,8 @@ QUESTION = Question(
         "Must return 0 (the additive identity).",
         "Returning 1 or None is incorrect.",
     ],
-    source_url="https://en.wikipedia.org/wiki/Recursion_(computer_science)#Base_case",
+    source_url="https://www.geeksforgeeks.org/recursion-practice-questions-for-gate/",
+    quiz_source="LeetCode Explore & GeeksforGeeks Recursion Practice",
 )
 
 

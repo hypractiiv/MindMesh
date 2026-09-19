@@ -27,15 +27,17 @@ def temp_store():
 
 
 def test_curated_catalog_topics():
-    """Verify all curated topics exist and have complete rubric and follow-up data."""
+    """Verify all curated topics exist and have complete rubric, follow-up, and quiz source data."""
     provider = InternetQAProvider()
     topics = provider.list_curated_topics()
-    assert len(topics) >= 5
+    assert len(topics) >= 15
+    assert all("quiz_source" in t for t in topics)
 
     # Check Binary Search
     bs_q = provider.get_question("binary_search_bounds")
     assert bs_q.concept_id == "binary_search_bounds"
     assert bs_q.source_url is not None
+    assert bs_q.quiz_source is not None
     assert len(bs_q.rubric_criteria) >= 2
     assert "low <= high" in bs_q.rubric_criteria[0]
 

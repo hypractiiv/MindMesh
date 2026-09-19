@@ -276,14 +276,8 @@ with st.sidebar:
 
     # --- Topic Selection ---
     st.subheader("🌐 Topic Selection")
-    curated_options = {
-        "recursion_base_case": "Recursion: Base Case in List Summation",
-        "binary_search_bounds": "Binary Search: Midpoint & Boundary Conditions",
-        "sql_where_vs_having": "SQL: WHERE vs HAVING Filtering",
-        "python_mutable_defaults": "Python: Mutable Default Arguments",
-        "dp_memoization_base": "Dynamic Programming: Memoization",
-        "graph_cycle_detection": "Graph Algorithms: Directed Graph Cycle",
-    }
+    curated_topics_list = provider.list_curated_topics()
+    curated_options = {item["concept_id"]: item["topic_name"] for item in curated_topics_list}
 
     selected_topic_key = st.selectbox(
         "Choose a Curated Topic:",
@@ -408,8 +402,17 @@ with st.container(border=True):
     topic_display = flow.question.topic_name or flow.question.concept_id
     st.subheader(f"Topic: {topic_display}")
 
-    if flow.question.source_url:
-        st.markdown(f"<div class='source-badge'>🌐 Internet Source: <a href='{flow.question.source_url}' target='_blank'>{flow.question.source_url}</a></div>", unsafe_allow_html=True)
+    if flow.question.quiz_source:
+        st.markdown(
+            f"<div class='source-badge'>📚 <strong>Quiz Reference:</strong> {flow.question.quiz_source} &nbsp;|&nbsp; "
+            f"<a href='{flow.question.source_url}' target='_blank'>Original Source ↗</a></div>",
+            unsafe_allow_html=True,
+        )
+    elif flow.question.source_url:
+        st.markdown(
+            f"<div class='source-badge'>🌐 <strong>Internet Source:</strong> <a href='{flow.question.source_url}' target='_blank'>{flow.question.source_url}</a></div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown(f"**Question:**\n{flow.question.prompt_text}")
 

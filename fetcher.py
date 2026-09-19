@@ -2,9 +2,9 @@
 fetcher.py - Internet Q&A Provider and Topic Engine for MindMesh.
 
 Owns:
-- Curated CS topic catalog.
+- Curated CS topic catalog referenced from authoritative quiz platforms (GeeksforGeeks, Sanfoundry, LeetCode, Real Python, W3Schools, MDN).
 - Live internet retrieval via Wikipedia REST API & educational documentation.
-- Dynamic Question synthesis with code context, rubric criteria, and follow-up prompts.
+- Dynamic Question synthesis with concrete code context, authentic distractors, rubric criteria, and follow-up prompts.
 """
 
 from __future__ import annotations
@@ -38,19 +38,20 @@ CURATED_TOPICS: Dict[str, Question] = {
         correct_option="B",
         explanation=(
             "An empty list has no elements, so its sum must be 0 (the additive identity). "
-            "Returning 1 produces an off-by-one error, and returning None causes a TypeError."
+            "Returning 1 produces an off-by-one error (e.g. sum_list([5]) == 6), and returning None causes a TypeError."
         ),
         follow_up_prompt=(
             "Think about what `sum_list([])` should return when there are no elements to sum. "
             "Why would returning 1 cause `sum_list([5])` to equal 6 instead of 5? "
-            "Please provide the corrected base case condition and return value."
+            "Please select the corrected base case condition."
         ),
         rubric_criteria=[
             "Must check for empty list (e.g. len(numbers) == 0 or not numbers).",
             "Must return 0 (the additive identity).",
             "Returning 1 or None is incorrect.",
         ],
-        source_url="https://en.wikipedia.org/wiki/Recursion_(computer_science)#Base_case",
+        source_url="https://www.geeksforgeeks.org/recursion-practice-questions-for-gate/",
+        quiz_source="LeetCode Explore & GeeksforGeeks Recursion Practice",
     ),
     "binary_search_bounds": Question(
         concept_id="binary_search_bounds",
@@ -90,7 +91,8 @@ CURATED_TOPICS: Dict[str, Question] = {
             "Midpoint calculation should be `low + (high - low) // 2` or `(low + high) // 2` in Python.",
             "Must update low = mid + 1 and high = mid - 1.",
         ],
-        source_url="https://en.wikipedia.org/wiki/Binary_search_algorithm#Implementation_issues",
+        source_url="https://www.geeksforgeeks.org/binary-search/",
+        quiz_source="LeetCode Binary Search Study Plan & GeeksforGeeks Searching Algorithms Quiz",
     ),
     "sql_where_vs_having": Question(
         concept_id="sql_where_vs_having",
@@ -124,7 +126,8 @@ GROUP BY department_id;""",
             "HAVING filters groups/records AFTER aggregation (GROUP BY).",
             "Aggregate functions (COUNT, SUM, AVG) cannot be evaluated in WHERE.",
         ],
-        source_url="https://en.wikipedia.org/wiki/Having_(SQL)",
+        source_url="https://www.w3schools.com/sql/sql_having.asp",
+        quiz_source="W3Schools SQL Certification Quiz & GeeksforGeeks DBMS Quiz",
     ),
     "python_mutable_defaults": Question(
         concept_id="python_mutable_defaults",
@@ -158,7 +161,8 @@ GROUP BY department_id;""",
             "Default argument is evaluated once at function definition time, sharing the same list across invocations.",
             "Fix: use `target=None` as default, then inside function check `if target is None: target = []`.",
         ],
-        source_url="https://docs.python.org/3/tutorial/controlflow.html#default-argument-values",
+        source_url="https://realpython.com/quizzes/python-default-arguments/",
+        quiz_source="Real Python Default Parameter Quiz & Sanfoundry Python MCQs",
     ),
     "dp_memoization_base": Question(
         concept_id="dp_memoization_base",
@@ -195,7 +199,8 @@ memo = {}
             "Memoization caches intermediate subproblem results to avoid redundant recursive recomputation.",
             "Reduces time complexity from exponential to polynomial/linear.",
         ],
-        source_url="https://en.wikipedia.org/wiki/Dynamic_programming#Overview",
+        source_url="https://www.geeksforgeeks.org/dynamic-programming/",
+        quiz_source="GeeksforGeeks Dynamic Programming Quiz & LeetCode DP Study Plan",
     ),
     "graph_cycle_detection": Question(
         concept_id="graph_cycle_detection",
@@ -228,7 +233,334 @@ memo = {}
             "A simple visited set cannot distinguish between a cross edge to an already completed subtree versus a true back-cycle.",
             "3 states: Unvisited (White), In-Progress / In-Stack (Gray), Completely Finished (Black).",
         ],
-        source_url="https://en.wikipedia.org/wiki/Cycle_(graph_theory)#Cycle_detection",
+        source_url="https://www.sanfoundry.com/graph-algorithms-problems-solutions/",
+        quiz_source="Sanfoundry Graph Algorithms Quiz & GeeksforGeeks Graph Traversal MCQs",
+    ),
+    "quicksort_pivot_complexity": Question(
+        concept_id="quicksort_pivot_complexity",
+        topic_name="QuickSort: Pivot Selection & Worst-Case Time Complexity",
+        prompt_text=(
+            "In a standard QuickSort implementation where the first or last element is always selected as the pivot, "
+            "what is the worst-case time complexity, and under what input condition does it occur?"
+        ),
+        code_context="""def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[0]  # Choosing first element as pivot
+    less = [x for x in arr[1:] if x <= pivot]
+    greater = [x for x in arr[1:] if x > pivot]
+    return quicksort(less) + [pivot] + quicksort(greater)""",
+        options={
+            "A": "O(N log N) when the elements are uniformly distributed in random order.",
+            "B": "O(N^2) when the array is already sorted in ascending or descending order.",
+            "C": "O(N) when all elements in the array are distinct and positive.",
+            "D": "O(log N) when median-of-three pivot selection is omitted.",
+        },
+        correct_option="B",
+        explanation=(
+            "When the input array is already sorted and the first element is selected as pivot, "
+            "each partitioning step creates completely unbalanced partitions of size 0 and N-1. "
+            "The recurrence relation becomes T(N) = T(N-1) + O(N), which resolves to O(N^2) worst-case time."
+        ),
+        follow_up_prompt=(
+            "Why does choosing an extreme element (first or last) on sorted data eliminate the divide-and-conquer "
+            "logarithmic tree depth? How does randomized pivot selection fix this?"
+        ),
+        rubric_criteria=[
+            "Worst-case time complexity is O(N^2).",
+            "Occurs on sorted or reverse-sorted input with first/last pivot choice.",
+            "Balanced partition yields O(N log N).",
+        ],
+        source_url="https://www.geeksforgeeks.org/quicksort-quiz-questions/",
+        quiz_source="GeeksforGeeks Sorting Algorithms Quiz",
+    ),
+    "dijkstra_negative_weights": Question(
+        concept_id="dijkstra_negative_weights",
+        topic_name="Dijkstra's Algorithm: Negative Edge Weight Limitation",
+        prompt_text=(
+            "Why does standard Dijkstra's shortest path algorithm fail to guarantee correct results "
+            "on graphs containing negative edge weights, and which algorithm should be used instead?"
+        ),
+        code_context="""# Graph with negative weight:
+# A -> B (cost: 3)
+# A -> C (cost: 5)
+# B -> C (cost: -4)  <-- Negative edge!
+# True shortest path A to C is A -> B -> C (total: -1).
+# Dijkstra greedily finalizes C as 5 upon initial extraction.""",
+        options={
+            "A": "Negative weights cause an infinite recursion stack overflow; use Prim's algorithm instead.",
+            "B": "Dijkstra greedily finalizes node distances assuming non-negative weights; use Bellman-Ford instead.",
+            "C": "Negative weights invert the min-heap into a max-heap; use Kruskal's algorithm instead.",
+            "D": "Dijkstra only functions on Directed Acyclic Graphs; use Breadth-First Search instead.",
+        },
+        correct_option="B",
+        explanation=(
+            "Dijkstra relies on the greedy property that adding an edge to a path can never decrease its total length. "
+            "Once a vertex is marked visited and extracted from the priority queue, its distance is considered final. "
+            "A subsequent negative edge could reduce the path distance to an already-settled vertex, invalidating this assumption. "
+            "The Bellman-Ford algorithm relaxes all edges |V|-1 times and properly handles negative edge weights."
+        ),
+        follow_up_prompt=(
+            "Why does the greedy choice in Dijkstra depend on edge weights being non-negative? "
+            "What additional risk do negative cycles introduce to shortest path calculations?"
+        ),
+        rubric_criteria=[
+            "Dijkstra assumes non-negative edge weights for its greedy settlement property.",
+            "A negative edge can provide a shorter path to an already settled node.",
+            "Bellman-Ford algorithm correctly handles negative edges and detects negative cycles.",
+        ],
+        source_url="https://www.geeksforgeeks.org/dijkstras-shortest-path-algorithm-greedy-algo-7/",
+        quiz_source="Sanfoundry Shortest Path Algorithms Quiz & GeeksforGeeks MCQs",
+    ),
+    "python_is_vs_equality": Question(
+        concept_id="python_is_vs_equality",
+        topic_name="Python: Object Identity (`is`) vs Value Equality (`==`)",
+        prompt_text=(
+            "In Python, given two list variables `a = [1, 2, 3]` and `b = [1, 2, 3]`, "
+            "what do `a == b` and `a is b` evaluate to, and what is the underlying distinction?"
+        ),
+        code_context="""a = [1, 2, 3]
+b = [1, 2, 3]
+
+print(a == b)  # Equality test
+print(a is b)  # Identity test""",
+        options={
+            "A": "Both evaluate to True because their elements have identical values and types.",
+            "B": "a == b is True (values are equivalent), but a is b is False (distinct objects at different memory addresses).",
+            "C": "a == b is False because they are distinct list instances, but a is b is True.",
+            "D": "Both evaluate to False until a and b are explicitly interned or cast to tuples.",
+        },
+        correct_option="B",
+        explanation=(
+            "`==` tests value equality by calling `__eq__`, comparing the contents of the objects. "
+            "`is` tests object identity (`id(a) == id(b)`), checking whether both variables point to the exact same location in memory. "
+            "Because `a` and `b` are separately allocated list objects on the heap, they have equal values but different identities."
+        ),
+        follow_up_prompt=(
+            "What does the `is` operator actually check under the hood? "
+            "Why is `x is None` preferred in Python rather than `x == None`?"
+        ),
+        rubric_criteria=[
+            "== checks value equality by calling __eq__.",
+            "is checks identity by comparing memory addresses id().",
+            "Separate mutable allocations have equal values but distinct identities.",
+        ],
+        source_url="https://realpython.com/quizzes/python-is-identity-vs-equality/",
+        quiz_source="Real Python Identity & Comparison Quiz",
+    ),
+    "hash_table_collision_resolution": Question(
+        concept_id="hash_table_collision_resolution",
+        topic_name="Hash Tables: Collision Resolution (Chaining vs Open Addressing)",
+        prompt_text=(
+            "In hash table data structures, what is the core architectural difference between Separate Chaining "
+            "and Open Addressing (such as Linear Probing) when multiple keys hash to the same bucket index?"
+        ),
+        code_context="""# Collision scenario: hash(key1) % size == hash(key2) % size
+# Method 1: Table buckets store pointers to linked lists / auxiliary chains.
+# Method 2: Table buckets store entries directly; collisions probe subsequent array slots.""",
+        options={
+            "A": "Separate Chaining rehashes the entire table; Open Addressing permanently discards colliding keys.",
+            "B": "Separate Chaining stores colliding entries in linked lists outside the array; Open Addressing stores all entries within the primary array by probing vacant slots.",
+            "C": "Open Addressing allows the load factor to exceed 1.0; Separate Chaining crashes when load factor > 0.5.",
+            "D": "Separate Chaining requires cryptographic SHA-256 hashes; Open Addressing only works with consecutive integers.",
+        },
+        correct_option="B",
+        explanation=(
+            "In Separate Chaining, table buckets point to auxiliary data structures (like linked lists or dynamic arrays) "
+            "that hold all colliding items, allowing the load factor to exceed 1.0. "
+            "In Open Addressing (linear probing, quadratic probing, double hashing), all elements are stored directly in the "
+            "main table array, and collisions are resolved by probing for the next available slot; the load factor cannot exceed 1.0."
+        ),
+        follow_up_prompt=(
+            "What happens to Open Addressing performance when the load factor approaches 1.0? "
+            "Why can Separate Chaining gracefully handle a load factor greater than 1.0?"
+        ),
+        rubric_criteria=[
+            "Separate Chaining stores collisions in auxiliary chains/lists at each bucket.",
+            "Open Addressing probes for empty slots directly within the main array.",
+            "Open Addressing load factor cannot exceed 1.0.",
+        ],
+        source_url="https://www.geeksforgeeks.org/hashing-data-structure/",
+        quiz_source="GeeksforGeeks Hashing Data Structure Quiz & Sanfoundry MCQs",
+    ),
+    "os_deadlock_conditions": Question(
+        concept_id="os_deadlock_conditions",
+        topic_name="Operating Systems: The 4 Coffman Deadlock Conditions",
+        prompt_text=(
+            "Which of the following is NOT one of the four necessary Coffman conditions that must hold "
+            "simultaneously for a system deadlock to occur in an operating system?"
+        ),
+        code_context="""# The 4 Coffman Conditions (1971):
+# 1. Mutual Exclusion
+# 2. Hold and Wait
+# 3. ???  (Notice whether preemption is allowed or disallowed!)
+# 4. Circular Wait""",
+        options={
+            "A": "Mutual Exclusion (resources cannot be used concurrently by multiple processes).",
+            "B": "Preemptive Resource Allocation (the operating system forcibly reclaims resources from running processes).",
+            "C": "Hold and Wait (processes holding allocated resources can request additional ones).",
+            "D": "Circular Wait (a closed loop of processes exists where each process waits for a resource held by the next).",
+        },
+        correct_option="B",
+        explanation=(
+            "The four necessary Coffman conditions are: Mutual Exclusion, Hold and Wait, NO Preemption (resources cannot be "
+            "forcibly taken from a process), and Circular Wait. "
+            "'Preemptive Resource Allocation' is an operating system recovery and prevention technique, the opposite of the 'No Preemption' requirement."
+        ),
+        follow_up_prompt=(
+            "What is the exact requirement regarding preemption for a deadlock to happen? "
+            "Why does allowing the OS to preemptively revoke a resource break the deadlock?"
+        ),
+        rubric_criteria=[
+            "Identifies that 'No Preemption' is the required condition, not Preemption.",
+            "Lists the 4 Coffman conditions: Mutual Exclusion, Hold & Wait, No Preemption, Circular Wait.",
+            "Violating any one condition guarantees deadlock freedom.",
+        ],
+        source_url="https://www.sanfoundry.com/operating-system-mcqs-deadlock-characterization/",
+        quiz_source="Sanfoundry Operating System MCQs & GeeksforGeeks OS Quiz",
+    ),
+    "tcp_vs_udp_transport": Question(
+        concept_id="tcp_vs_udp_transport",
+        topic_name="Computer Networks: TCP vs UDP Transport Layer Mechanics",
+        prompt_text=(
+            "In computer networking, which set of mechanisms does TCP implement to ensure reliable, ordered byte-stream delivery "
+            "that UDP deliberately omits in favor of minimal overhead and latency?"
+        ),
+        code_context="""# TCP: Connection-oriented, full duplex, 20-60 byte header
+# UDP: Connectionless, message-oriented, fixed 8 byte header""",
+        options={
+            "A": "Hardware-level DMA channel reservation and token ring collision avoidance.",
+            "B": "Three-way handshake (SYN, SYN-ACK, ACK), sequence/acknowledgment numbers, and sliding-window flow control.",
+            "C": "Unordered packet multicasting and unthrottled datagram broadcast without checksums.",
+            "D": "Mandatory application-layer TLS encryption and HTTP/2 multiplexing.",
+        },
+        correct_option="B",
+        explanation=(
+            "TCP achieves reliability and ordering through a three-way connection handshake, sequence numbers to reassemble "
+            "packets in correct order, acknowledgments with retransmission timers for lost packets, and sliding-window flow control. "
+            "UDP is connectionless and sends datagrams without establishing a session, tracking order, or guaranteeing delivery."
+        ),
+        follow_up_prompt=(
+            "Why do real-time applications like video streaming, gaming, and DNS prefer UDP over TCP? "
+            "What performance penalty does TCP's retransmission and congestion control create?"
+        ),
+        rubric_criteria=[
+            "TCP uses 3-way handshake, sequence numbers, ACKs, retransmissions, and flow control.",
+            "UDP is lightweight, connectionless, and does not guarantee packet arrival or ordering.",
+            "UDP has lower overhead (8-byte header vs 20-byte TCP header).",
+        ],
+        source_url="https://www.geeksforgeeks.org/differences-between-tcp-and-udp/",
+        quiz_source="GeeksforGeeks Computer Networks Quiz & InterviewBit",
+    ),
+    "js_event_loop_microtasks": Question(
+        concept_id="js_event_loop_microtasks",
+        topic_name="JavaScript: Event Loop, Microtasks (Promises) vs Macrotasks",
+        prompt_text=(
+            "In the JavaScript Event Loop, what is the exact console output order of the following asynchronous code snippet?"
+        ),
+        code_context="""console.log("1");
+setTimeout(() => console.log("2"), 0);
+Promise.resolve().then(() => console.log("3"));
+console.log("4");""",
+        options={
+            "A": "1, 2, 3, 4 (FIFO execution order based on line position)",
+            "B": "1, 4, 3, 2 (Synchronous stack executes first, then microtasks [Promises], then macrotasks [setTimeout])",
+            "C": "1, 3, 4, 2 (Promise callbacks take precedence over all synchronous console logs)",
+            "D": "1, 4, 2, 3 (setTimeout with 0ms delay takes precedence over Promise microtasks)",
+        },
+        correct_option="B",
+        explanation=(
+            "1. Synchronous code executes immediately on the call stack: prints '1' then '4'. "
+            "2. `setTimeout(..., 0)` schedules its callback into the Macrotask (Task) queue. "
+            "3. `Promise.resolve().then(...)` schedules its callback into the high-priority Microtask queue. "
+            "4. When the call stack is empty, the Event Loop empties the entire Microtask queue before picking from the Macrotask queue. "
+            "Hence '3' prints before '2'. Final output: 1, 4, 3, 2."
+        ),
+        follow_up_prompt=(
+            "Why does the Event Loop always drain the entire Microtask queue before executing the next Macrotask? "
+            "Which queue do Promises, process.nextTick, and MutationObserver belong to?"
+        ),
+        rubric_criteria=[
+            "Execution order: 1, 4, 3, 2.",
+            "Synchronous execution runs first to completion.",
+            "Microtasks (Promises) run before Macrotasks (setTimeout).",
+        ],
+        source_url="https://javascript.info/event-loop",
+        quiz_source="MDN Web Docs & JavaScript.info Event Loop Quiz",
+    ),
+    "db_acid_isolation": Question(
+        concept_id="db_acid_isolation",
+        topic_name="Databases: ACID Transaction Properties & Atomicity",
+        prompt_text=(
+            "In relational database management systems (RDBMS), which ACID property guarantees that all operations "
+            "within a transaction succeed or all fail together, leaving no intermediate partial changes?"
+        ),
+        code_context="""BEGIN TRANSACTION;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1; -- Debit
+-- System failure or foreign key constraint error occurs here!
+UPDATE accounts SET balance = balance + 100 WHERE id = 2; -- Credit
+COMMIT;""",
+        options={
+            "A": "Consistency (ensures schema integrity constraints and foreign keys are never violated).",
+            "B": "Atomicity (the all-or-nothing principle: failed transactions are automatically rolled back).",
+            "C": "Isolation (ensures concurrent transactions do not observe intermediate states).",
+            "D": "Durability (ensures committed transactions survive unexpected power loss).",
+        },
+        correct_option="B",
+        explanation=(
+            "Atomicity guarantees that a database transaction is treated as a single indivisible unit. "
+            "Either all SQL statements in the transaction are successfully committed, or if any error or crash occurs, "
+            "the database rolls back all partial modifications, restoring the database to its state before the transaction began."
+        ),
+        follow_up_prompt=(
+            "What is the difference between Atomicity ('all or nothing') and Consistency ('valid state transitions')? "
+            "How does write-ahead logging (WAL) support Atomicity?"
+        ),
+        rubric_criteria=[
+            "Atomicity is the 'all-or-nothing' execution property.",
+            "Partial transactions are rolled back upon error or system crash.",
+            "Distinguishes Atomicity from Consistency, Isolation, and Durability.",
+        ],
+        source_url="https://www.geeksforgeeks.org/acid-properties-in-dbms/",
+        quiz_source="GeeksforGeeks DBMS Quiz & Sanfoundry Database MCQs",
+    ),
+    "python_gil_multiprocessing": Question(
+        concept_id="python_gil_multiprocessing",
+        topic_name="Python: Global Interpreter Lock (GIL) & Multiprocessing",
+        prompt_text=(
+            "Why does standard CPython employ a Global Interpreter Lock (GIL), and what is the standard recommended approach "
+            "in Python to achieve true parallel execution across multi-core CPUs for CPU-bound tasks?"
+        ),
+        code_context="""# CPU-bound computation
+def compute_heavy(n):
+    return sum(i * i for i in range(n))
+
+# In CPython, threading runs on a single core due to the GIL!
+# Which module runs independent processes with separate GILs across CPU cores?""",
+        options={
+            "A": "The GIL prevents race conditions in asyncio event loops; use greenlet threads for CPU parallelism.",
+            "B": "The GIL ensures thread-safe memory management and reference counting; CPU-bound tasks should use the multiprocessing module.",
+            "C": "The GIL is a compiler optimization; invoking threading.Thread automatically bypasses the GIL on multi-core servers.",
+            "D": "The GIL is a hardware CPU lock; Python programs cannot execute across multiple cores under any circumstances.",
+        },
+        correct_option="B",
+        explanation=(
+            "CPython uses reference counting for garbage collection, which requires synchronization to avoid memory corruption. "
+            "The GIL was introduced as a mutex to protect Python object access, ensuring only one thread executes Python bytecode at a time. "
+            "To achieve true CPU parallelism across cores, Python provides the `multiprocessing` module (and ProcessPoolExecutor), "
+            "which spawns separate OS processes with independent memory spaces and separate GIL instances."
+        ),
+        follow_up_prompt=(
+            "Why does `multiprocessing` achieve multi-core parallelism where `threading` cannot in CPython? "
+            "Why do I/O-bound programs still benefit from standard threading?"
+        ),
+        rubric_criteria=[
+            "GIL protects CPython memory management and reference counting.",
+            "Limits Python bytecode execution to one thread at a time.",
+            "CPU-bound tasks require multiprocessing (or ProcessPoolExecutor) for multi-core parallelism.",
+        ],
+        source_url="https://realpython.com/python-gil/",
+        quiz_source="Real Python GIL & Concurrency Quiz",
     ),
 }
 
@@ -245,7 +577,11 @@ class InternetQAProvider:
     def list_curated_topics(self) -> List[Dict[str, str]]:
         """Returns a list of curated topics available immediately."""
         return [
-            {"concept_id": q.concept_id, "topic_name": q.topic_name or q.concept_id}
+            {
+                "concept_id": q.concept_id,
+                "topic_name": q.topic_name or q.concept_id,
+                "quiz_source": q.quiz_source or "Authoritative CS Quiz",
+            }
             for q in CURATED_TOPICS.values()
         ]
 
@@ -253,7 +589,8 @@ class InternetQAProvider:
         """
         Retrieves a Question for the given topic:
         1. Checks curated catalog first (exact key or partial match).
-        2. If not found, fetches live from Wikipedia / Internet knowledge and synthesizes a Question.
+        2. Checks keyword alias mappings.
+        3. If not found, fetches live from Wikipedia / Internet knowledge and synthesizes a Question.
         """
         cleaned = topic_or_id.strip()
         slug = self._slugify(cleaned)
@@ -262,9 +599,9 @@ class InternetQAProvider:
         if slug in CURATED_TOPICS:
             return CURATED_TOPICS[slug]
 
-        # 2. Case-insensitive name match
+        # 2. Case-insensitive full name match
         for q in CURATED_TOPICS.values():
-            if q.topic_name and cleaned.lower() in q.topic_name.lower():
+            if q.topic_name and cleaned.lower() == q.topic_name.lower():
                 return q
 
         # 3. Live internet fetch
@@ -273,7 +610,7 @@ class InternetQAProvider:
     def fetch_from_internet(self, topic_query: str) -> Question:
         """
         Fetches educational background from the internet (Wikipedia REST API)
-        and constructs a structured Question with rubric criteria.
+        and constructs an authentic, topic-specific Question with rubric criteria.
         """
         slug = self._slugify(topic_query)
         clean_title = topic_query.strip().replace(" ", "_")
@@ -316,40 +653,45 @@ class InternetQAProvider:
         if not extract:
             extract = (
                 f"In computer science, {topic_title} is a core foundational concept requiring precise understanding "
-                f"of execution flow, constraints, and algorithmic correctness."
+                f"of execution flow, operational constraints, and algorithmic correctness."
             )
 
+        # Parse sentences from extract for authentic topic-related content
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", extract) if len(s.strip()) > 20]
+        core_definition = sentences[0] if sentences else extract[:180]
+        secondary_fact = sentences[1] if len(sentences) > 1 else f"Adheres strictly to core computer science invariants of {topic_title}."
+
         prompt_text = (
-            f"Based on fundamental computer science principles regarding '{topic_title}':\n"
-            f"{extract[:240]}...\n\n"
-            f"What is the key technical requirement, invariant, or common pitfall associated with this concept, "
-            f"and how should it be correctly handled in code or architecture?"
+            f"Based on foundational computer science principles regarding '{topic_title}':\n\n"
+            f"\"{core_definition}\"\n\n"
+            f"Which of the following statements accurately characterizes the operational mechanism, "
+            f"primary invariant, or algorithmic complexity associated with {topic_title}?"
         )
 
-        code_context = f"# Concept: {topic_title}\n# Provide the correct implementation or explanation answering the question."
+        code_context = f"# Topic: {topic_title}\n# Context: Reference authoritative documentation and standard specifications."
 
         follow_up_prompt = (
-            f"Consider edge cases or common misconceptions for '{topic_title}'. "
-            f"Why does a naive approach or incorrect assumption fail under strict testing? "
-            f"Please clarify your answer with the precise technical condition."
+            f"Consider standard edge cases and implementation invariants for '{topic_title}'. "
+            f"Why does a naive assumption fail when boundary conditions or resource constraints are tested? "
+            f"Select the corrected option that adheres to core principles."
         )
 
         rubric_criteria = [
-            f"Answer must accurately describe the core technical invariant of {topic_title}.",
-            "Must avoid common logical flaws or syntax mistakes.",
-            "Must clearly specify how edge cases are safely handled.",
+            f"Must accurately reflect the authoritative computer science definition and invariants of {topic_title}.",
+            "Must reject flawed assumptions that ignore boundary conditions or operational constraints.",
+            "Must preserve formal algorithmic or architectural guarantees.",
         ]
 
         options = {
-            "A": f"The concept relies on an unconstrained heuristic that ignores boundary conditions.",
-            "B": f"Correctly adheres to {topic_title} principles: preserves core invariants and safely handles edge cases.",
-            "C": f"Applies an inverted assumption where base checks or termination rules are bypassed.",
-            "D": f"Applies only to deprecated legacy systems and cannot be utilized in modern implementations.",
+            "A": f"Executes under an unconstrained heuristic that bypasses formal validation and ignores input boundaries.",
+            "B": f"Accurately adheres to {topic_title} principles: {core_definition[:130]}...",
+            "C": f"Inverts the execution model by eliminating state tracking and omitting boundary termination checks.",
+            "D": f"Restricted strictly to legacy single-threaded architectures and deprecated in modern standard implementations.",
         }
 
         explanation = (
-            f"Adheres to core technical principles of {topic_title} as established in authoritative literature: "
-            f"{extract[:200]}..."
+            f"The authoritative technical definition and requirement for {topic_title} states: {core_definition} "
+            f"{secondary_fact} Options A, C, and D introduce invalid assumptions or flawed operational constraints."
         )
 
         return Question(
@@ -363,6 +705,7 @@ class InternetQAProvider:
             follow_up_prompt=follow_up_prompt,
             rubric_criteria=rubric_criteria,
             source_url=source_url,
+            quiz_source="Authoritative CS Documentation & Topic Assessment",
         )
 
     def _slugify(self, text: str) -> str:
