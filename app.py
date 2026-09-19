@@ -156,19 +156,47 @@ def get_session() -> FlowSession:
     user = get_current_user()
 
     if "current_topic" not in st.session_state:
-        st.session_state.current_topic = "recursion_base_case"
+        st.session_state.current_topic = "Recursion"
 
     if "flow_session" not in st.session_state or st.session_state.flow_session is None:
         session = FlowSession(store=store, user_id=user.username)
-        q = provider.get_question(st.session_state.current_topic, shuffle=True)
+        cur_topic = st.session_state.current_topic
+        slug = provider._slugify(cur_topic)
+
+        # Retrieve prior records and previous question texts for anti-repetition
+        prior_records = store.get_concept_records(slug, user_id=user.username)
+        prior_events = store.get_all_session_events(user_id=user.username)
+        prior_questions = [
+            ev.payload["question"]["prompt_text"]
+            for ev in prior_events
+            if ev.event_type == "QUESTION_LOADED"
+            and ev.payload.get("question", {}).get("concept_id") == slug
+            and "question" in ev.payload
+            and "prompt_text" in ev.payload["question"]
+        ]
+
+        var_offset = st.session_state.get("topic_variation_offset", 0)
+        enc_idx = len(prior_records) + var_offset
+
+        q = provider.get_question(
+            cur_topic,
+            encounter_index=enc_idx,
+            prior_questions=prior_questions,
+            shuffle=True,
+            force_dynamic=True,
+        )
         step_prompting(session, question=q)
         st.session_state.flow_session = session
     return st.session_state.flow_session
 
 
-def reset_session(new_topic: str | None = None):
-    if new_topic:
+def reset_session(new_topic: str | None = None, advance_variation: bool = False):
+    if new_topic and new_topic != st.session_state.get("current_topic"):
         st.session_state.current_topic = new_topic
+        st.session_state["topic_variation_offset"] = 0
+    elif advance_variation:
+        st.session_state["topic_variation_offset"] = st.session_state.get("topic_variation_offset", 0) + 1
+
     st.session_state.flow_session = None
     st.session_state["ans_area"] = ""
     st.session_state["fu_area"] = ""
@@ -284,29 +312,42 @@ with st.sidebar:
 
     st.divider()
 
-    # --- Topic Selection ---
-    st.subheader("🌐 Topic Selection")
-    curated_topics_list = provider.list_curated_topics()
-    curated_options = {item["concept_id"]: item["topic_name"] for item in curated_topics_list}
-
-    selected_topic_key = st.selectbox(
-        "Choose a Curated Topic:",
-        options=list(curated_options.keys()),
-        format_func=lambda k: curated_options[k],
-        index=list(curated_options.keys()).index(st.session_state.get("current_topic", "recursion_base_case"))
-        if st.session_state.get("current_topic", "recursion_base_case") in curated_options
-        else 0,
+    # --- Dynamic Topic & Question Generator ---
+    st.subheader("🌐 Dynamic Topic Generator")
+    current_topic_val = st.session_state.get("current_topic", "Recursion")
+    custom_topic = st.text_input(
+        "Enter Topic / Concept to Practice:",
+        value=current_topic_val,
+        placeholder="e.g. Recursion, Dynamic Programming, SQL, OS Deadlocks, Raft",
     )
 
-    if st.button("Load Curated Topic", use_container_width=True):
-        reset_session(new_topic=selected_topic_key)
+    col_gen, col_next = st.columns([1, 1])
+    with col_gen:
+        if st.button("✨ Practice Topic", type="primary", use_container_width=True):
+            if custom_topic.strip():
+                with st.spinner("Generating dynamic question via Gemini AI..."):
+                    reset_session(new_topic=custom_topic.strip())
+    with col_next:
+        if st.button("🎲 Next Question", use_container_width=True, help="Synthesize a new, non-repeating question on this topic"):
+            with st.spinner("Synthesizing next distinct question on this topic..."):
+                reset_session(advance_variation=True)
 
-    st.write("— OR —")
-    custom_topic = st.text_input("Search & Generate Any Topic:", placeholder="e.g. Trie, Red-Black Tree, Docker, Raft")
-    if st.button("✨ Generate with Gemini AI", use_container_width=True):
-        if custom_topic.strip():
-            with st.spinner("Generating authentic CS quiz question via Gemini AI..."):
-                reset_session(new_topic=custom_topic.strip())
+    st.markdown("##### Quick Topics")
+    quick_topics = [
+        "Recursion",
+        "Binary Search",
+        "Dynamic Programming",
+        "Graph Traversal",
+        "OS Deadlocks",
+        "SQL Indexing",
+        "Python GIL",
+        "System Design",
+    ]
+    q_cols = st.columns(2)
+    for idx, q_topic in enumerate(quick_topics):
+        with q_cols[idx % 2]:
+            if st.button(q_topic, key=f"quick_t_{idx}", use_container_width=True):
+                reset_session(new_topic=q_topic)
 
     st.divider()
     st.subheader("Session Actions")
@@ -425,7 +466,12 @@ if prior_records and not flow.is_terminated and flow.attempt_count == 0:
 # Active Question Card
 with st.container(border=True):
     topic_display = flow.question.topic_name or flow.question.concept_id
-    st.subheader(f"Topic: {topic_display}")
+    card_col1, card_col2 = st.columns([3, 1])
+    with card_col1:
+        st.subheader(f"Topic: {topic_display}")
+    with card_col2:
+        if st.button("🎲 Next Question", key="next_q_card_top", use_container_width=True, help="Synthesize a new, non-repeating question on this topic"):
+            reset_session(advance_variation=True)
 
     if flow.question.quiz_source:
         st.markdown(
@@ -681,15 +727,25 @@ elif flow.state == State.RECORDED:
 
     st.write(f"**Student:** `{flow.user_id}` | **Session:** `{flow.session_id}` | **Concept:** `{current_cid}`")
 
-    if st.button("Start Next Review Cycle", type="primary"):
-        reset_session()
+    col_end1, col_end2 = st.columns(2)
+    with col_end1:
+        if st.button("🎲 Next Question on this Topic", type="primary", use_container_width=True):
+            reset_session(advance_variation=True)
+    with col_end2:
+        if st.button("🔄 Start New Cycle", use_container_width=True):
+            reset_session()
 
 # State 4: SKIPPED
 elif flow.state == State.SKIPPED:
     st.error("### ⏸️ Session Skipped / Timed Out")
     st.caption("Decay interval has been accelerated. Review will be resurfaced soon.")
-    if st.button("Restart Session"):
-        reset_session()
+    col_sk1, col_sk2 = st.columns(2)
+    with col_sk1:
+        if st.button("🎲 Next Question on this Topic", type="primary", use_container_width=True):
+            reset_session(advance_variation=True)
+    with col_sk2:
+        if st.button("Restart Session", use_container_width=True):
+            reset_session()
 
 # Persistent Event Stream Table
 st.divider()

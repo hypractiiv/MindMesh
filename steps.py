@@ -31,7 +31,22 @@ def step_prompting(
         session.question = question
     elif topic is not None:
         provider = InternetQAProvider()
-        session.question = provider.get_question(topic)
+        slug = provider._slugify(topic)
+        prior_records = session.store.get_concept_records(slug, user_id=session.user_id)
+        prior_events = session.store.get_all_session_events(user_id=session.user_id)
+        prior_prompts = [
+            ev.payload["question"]["prompt_text"]
+            for ev in prior_events
+            if ev.event_type == "QUESTION_LOADED"
+            and ev.payload.get("question", {}).get("concept_id") == slug
+            and "question" in ev.payload
+            and "prompt_text" in ev.payload["question"]
+        ]
+        session.question = provider.get_question(
+            topic,
+            encounter_index=len(prior_records),
+            prior_questions=prior_prompts,
+        )
     elif session.question is None:
         session.question = DEFAULT_QUESTION
 

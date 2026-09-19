@@ -597,34 +597,54 @@ class InternetQAProvider:
             for q in CURATED_TOPICS.values()
         ]
 
-    def get_question(self, topic_or_id: str, shuffle: bool = False) -> Question:
+    def get_question(
+        self,
+        topic_or_id: str,
+        encounter_index: int = 0,
+        prior_questions: Optional[List[str]] = None,
+        shuffle: bool = False,
+        force_dynamic: bool = False,
+    ) -> Question:
         """
         Retrieves a Question for the given topic:
-        1. Checks curated catalog first (exact key or partial match).
-        2. Checks keyword alias mappings.
+        1. If force_dynamic is True (used in app or when practicing repeated topics),
+           directly synthesizes a fresh Question via Google Gemini API / internet with anti-repetition.
+        2. Otherwise, checks curated catalog first for legacy tests.
         3. If not found, fetches live from Wikipedia / Internet knowledge and synthesizes a Question.
-        If shuffle is True, randomizes option keys so the correct answer is not predictably Option B.
         """
         cleaned = topic_or_id.strip()
         slug = self._slugify(cleaned)
 
-        # 1. Exact catalog match
-        if slug in CURATED_TOPICS:
-            q = CURATED_TOPICS[slug]
-            return q.shuffle_options() if shuffle else q
-
-        # 2. Case-insensitive full name match
-        for q in CURATED_TOPICS.values():
-            if q.topic_name and cleaned.lower() == q.topic_name.lower():
+        if not force_dynamic:
+            # 1. Exact catalog match (used by legacy deterministic tests)
+            if slug in CURATED_TOPICS:
+                q = CURATED_TOPICS[slug]
                 return q.shuffle_options() if shuffle else q
 
-        # 3. Live internet fetch
-        return self.fetch_from_internet(cleaned, shuffle=shuffle)
+            # 2. Case-insensitive full name match
+            for q in CURATED_TOPICS.values():
+                if q.topic_name and cleaned.lower() == q.topic_name.lower():
+                    return q.shuffle_options() if shuffle else q
 
-    def fetch_with_gemini(self, topic_query: str, shuffle: bool = True) -> Optional[Question]:
+        # 3. Live internet/Gemini fetch with anti-repetition
+        return self.fetch_from_internet(
+            cleaned,
+            shuffle=shuffle,
+            encounter_index=encounter_index,
+            prior_questions=prior_questions,
+        )
+
+    def fetch_with_gemini(
+        self,
+        topic_query: str,
+        encounter_index: int = 0,
+        prior_questions: Optional[List[str]] = None,
+        shuffle: bool = True,
+    ) -> Optional[Question]:
         """
         Synthesizes an authentic, topic-specific multiple-choice question using Google Gemini API.
         Models the question after reputable quiz websites (GeeksforGeeks, Sanfoundry, LeetCode, Real Python).
+        Enforces anti-repetition by passing prior questions when the topic is practiced repeatedly.
         """
         if not self.gemini_api_key:
             return None
@@ -632,10 +652,24 @@ class InternetQAProvider:
         clean_slug = self._slugify(topic_query)
         clean_title = topic_query.strip().replace(" ", "_")
 
+        prior_section = ""
+        if prior_questions:
+            recent_pqs = [q.strip() for q in prior_questions if q and q.strip()][-5:]
+            if recent_pqs:
+                bullets = "\n".join(f"- {pq[:160]}..." if len(pq) > 160 else f"- {pq}" for pq in recent_pqs)
+                prior_section = (
+                    f"\nANTI-REPETITION CONSTRAINT (Question #{encounter_index + 1} on this topic):\n"
+                    f"The student has ALREADY answered the following questions on this topic:\n"
+                    f"{bullets}\n\n"
+                    f"CRITICAL REQUIREMENT: Do NOT repeat, rephrase, or ask about the same scenario/function as any of the questions above. "
+                    f"You MUST test a DIFFERENT subtopic, function, algorithmic scenario, failure mode, or edge case within '{topic_query}'.\n"
+                )
+
         prompt = (
             f"You are an expert Computer Science educator creating an authentic, topic-specific multiple choice quiz question "
             f"for a technical interview or university examination on the topic: '{topic_query}'.\n"
-            f"Model this question directly on real quizzes from authoritative websites such as GeeksforGeeks, Sanfoundry, LeetCode, Real Python, or W3Schools.\n\n"
+            f"Model this question directly on real quizzes from authoritative websites such as GeeksforGeeks, Sanfoundry, LeetCode, Real Python, or W3Schools.\n"
+            f"{prior_section}\n"
             f"Requirements:\n"
             f"- concept_id: snake_case string identifier\n"
             f"- topic_name: clear topic title\n"
@@ -705,14 +739,26 @@ class InternetQAProvider:
 
         return None
 
-    def fetch_from_internet(self, topic_query: str, use_gemini: bool = True, shuffle: bool = False) -> Question:
+    def fetch_from_internet(
+        self,
+        topic_query: str,
+        use_gemini: bool = True,
+        shuffle: bool = False,
+        encounter_index: int = 0,
+        prior_questions: Optional[List[str]] = None,
+    ) -> Question:
         """
         Fetches educational background and constructs an authentic, topic-specific Question:
-        1. Attempts high-quality synthesis via Google Gemini API.
-        2. If unavailable or offline, retrieves from Wikipedia REST API with factual extraction.
+        1. Attempts high-quality synthesis via Google Gemini API with anti-repetition.
+        2. If unavailable or offline, retrieves from Wikipedia REST API with sentence offset.
         """
         if use_gemini and self.gemini_api_key:
-            gemini_q = self.fetch_with_gemini(topic_query, shuffle=shuffle)
+            gemini_q = self.fetch_with_gemini(
+                topic_query,
+                encounter_index=encounter_index,
+                prior_questions=prior_questions,
+                shuffle=shuffle,
+            )
             if gemini_q is not None:
                 return gemini_q
         slug = self._slugify(topic_query)
@@ -761,8 +807,9 @@ class InternetQAProvider:
 
         # Parse sentences from extract for authentic topic-related content
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", extract) if len(s.strip()) > 20]
-        core_definition = sentences[0] if sentences else extract[:180]
-        secondary_fact = sentences[1] if len(sentences) > 1 else f"Adheres strictly to core computer science invariants of {topic_title}."
+        s_idx = encounter_index % max(1, len(sentences))
+        core_definition = sentences[s_idx] if sentences else extract[:180]
+        secondary_fact = sentences[(s_idx + 1) % len(sentences)] if len(sentences) > 1 else f"Adheres strictly to core computer science invariants of {topic_title}."
 
         prompt_text = (
             f"Based on foundational computer science principles regarding '{topic_title}':\n\n"
