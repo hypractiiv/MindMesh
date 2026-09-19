@@ -585,6 +585,20 @@ class InternetQAProvider:
         }
         self.gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.gemini_model = model or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
+        self._client: Optional[httpx.Client] = None
+        self._cache: Dict[str, Question] = {}
+
+    def _get_http_client(self) -> httpx.Client:
+        if self._client is None or getattr(self._client, "is_closed", False):
+            self._client = httpx.Client(timeout=self.timeout, headers=self.headers)
+        return self._client
+
+    def close(self):
+        if self._client is not None and not getattr(self._client, "is_closed", True):
+            try:
+                self._client.close()
+            except Exception:
+                pass
 
     def list_curated_topics(self) -> List[Dict[str, str]]:
         """Returns a list of curated topics available immediately."""
@@ -685,6 +699,11 @@ class InternetQAProvider:
             f"Return ONLY a valid JSON object matching these fields."
         )
 
+        cache_key = f"{clean_slug}:{encounter_index}:{hash(tuple(prior_questions or []))}"
+        if cache_key in self._cache:
+            cached_q = self._cache[cache_key]
+            return cached_q.shuffle_options() if shuffle else cached_q
+
         candidate_models = [
             self.gemini_model,
             "gemini-3.1-flash-lite-preview",
@@ -693,6 +712,7 @@ class InternetQAProvider:
         ]
         candidate_models = list(dict.fromkeys(candidate_models))
 
+        client = self._get_http_client()
         for model_name in candidate_models:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_api_key}"
             payload = {
@@ -703,37 +723,37 @@ class InternetQAProvider:
                 },
             }
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        candidates = data.get("candidates", [])
-                        if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
-                            raw_text = candidates[0]["content"]["parts"][0]["text"]
-                            q_dict = json.loads(raw_text)
+                resp = client.post(url, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
+                        raw_text = candidates[0]["content"]["parts"][0]["text"]
+                        q_dict = json.loads(raw_text)
 
-                            options = q_dict.get("options")
-                            if isinstance(options, dict) and set(options.keys()) == {"A", "B", "C", "D"}:
-                                src_url = q_dict.get("source_url") or f"https://en.wikipedia.org/wiki/{clean_title}"
-                                if not str(src_url).startswith("http"):
-                                    src_url = f"https://en.wikipedia.org/wiki/{clean_title}"
-                                correct_opt = q_dict.get("correct_option")
-                                if correct_opt not in {"A", "B", "C", "D"}:
-                                    correct_opt = "B"
-                                q = Question(
-                                    concept_id=clean_slug,
-                                    topic_name=q_dict.get("topic_name") or topic_query.title(),
-                                    prompt_text=q_dict.get("prompt_text") or f"Question on {topic_query}",
-                                    code_context=q_dict.get("code_context"),
-                                    options=options,
-                                    correct_option=correct_opt,
-                                    explanation=q_dict.get("explanation") or f"Authoritative explanation for {topic_query}",
-                                    follow_up_prompt=q_dict.get("follow_up_prompt") or f"Explain why the alternatives fail for {topic_query}.",
-                                    rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
-                                    source_url=src_url,
-                                    quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (Gemini AI)",
-                                )
-                                return q.shuffle_options() if shuffle else q
+                        options = q_dict.get("options")
+                        if isinstance(options, dict) and set(options.keys()) == {"A", "B", "C", "D"}:
+                            src_url = q_dict.get("source_url") or f"https://en.wikipedia.org/wiki/{clean_title}"
+                            if not str(src_url).startswith("http"):
+                                src_url = f"https://en.wikipedia.org/wiki/{clean_title}"
+                            correct_opt = q_dict.get("correct_option")
+                            if correct_opt not in {"A", "B", "C", "D"}:
+                                correct_opt = "B"
+                            q = Question(
+                                concept_id=clean_slug,
+                                topic_name=q_dict.get("topic_name") or topic_query.title(),
+                                prompt_text=q_dict.get("prompt_text") or f"Question on {topic_query}",
+                                code_context=q_dict.get("code_context"),
+                                options=options,
+                                correct_option=correct_opt,
+                                explanation=q_dict.get("explanation") or f"Authoritative explanation for {topic_query}",
+                                follow_up_prompt=q_dict.get("follow_up_prompt") or f"Explain why the alternatives fail for {topic_query}.",
+                                rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
+                                source_url=src_url,
+                                quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (Gemini AI)",
+                            )
+                            self._cache[cache_key] = q
+                            return q.shuffle_options() if shuffle else q
             except Exception:
                 continue
 
@@ -770,30 +790,30 @@ class InternetQAProvider:
         topic_title = topic_query.title()
 
         try:
-            with httpx.Client(timeout=self.timeout, headers=self.headers) as client:
-                resp = client.get(api_url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    extract = data.get("extract")
-                    topic_title = data.get("title", topic_query.title())
-                    if "content_urls" in data and "desktop" in data["content_urls"]:
-                        source_url = data["content_urls"]["desktop"].get("page", source_url)
-                else:
-                    # Try search endpoint if exact title didn't match
-                    search_url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(topic_query)}&limit=1&namespace=0&format=json"
-                    search_resp = client.get(search_url)
-                    if search_resp.status_code == 200:
-                        s_data = search_resp.json()
-                        if len(s_data) > 1 and len(s_data[1]) > 0:
-                            found_title = s_data[1][0]
-                            sub_api = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(found_title.replace(' ', '_'))}"
-                            sub_resp = client.get(sub_api)
-                            if sub_resp.status_code == 200:
-                                sub_data = sub_resp.json()
-                                extract = sub_data.get("extract")
-                                topic_title = sub_data.get("title", found_title)
-                                if "content_urls" in sub_data and "desktop" in sub_data["content_urls"]:
-                                    source_url = sub_data["content_urls"]["desktop"].get("page", source_url)
+            client = self._get_http_client()
+            resp = client.get(api_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                extract = data.get("extract")
+                topic_title = data.get("title", topic_query.title())
+                if "content_urls" in data and "desktop" in data["content_urls"]:
+                    source_url = data["content_urls"]["desktop"].get("page", source_url)
+            else:
+                # Try search endpoint if exact title didn't match
+                search_url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(topic_query)}&limit=1&namespace=0&format=json"
+                search_resp = client.get(search_url)
+                if search_resp.status_code == 200:
+                    s_data = search_resp.json()
+                    if len(s_data) > 1 and len(s_data[1]) > 0:
+                        found_title = s_data[1][0]
+                        sub_api = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(found_title.replace(' ', '_'))}"
+                        sub_resp = client.get(sub_api)
+                        if sub_resp.status_code == 200:
+                            sub_data = sub_resp.json()
+                            extract = sub_data.get("extract")
+                            topic_title = sub_data.get("title", found_title)
+                            if "content_urls" in sub_data and "desktop" in sub_data["content_urls"]:
+                                source_url = sub_data["content_urls"]["desktop"].get("page", source_url)
         except Exception:
             # Resilient offline/network fallback
             pass

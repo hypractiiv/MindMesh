@@ -124,13 +124,44 @@ st.markdown("""
 
 
 def get_store() -> Any:
-    load_dotenv(override=True)
-    target_pg = bool(os.getenv("DATABASE_URL"))
     if "store" not in st.session_state:
         st.session_state.store = get_database_store()
-    elif target_pg and getattr(st.session_state.store, "engine_name", "") != "PostgreSQL":
-        st.session_state.store = get_database_store()
     return st.session_state.store
+
+
+def invalidate_db_cache():
+    """Clears cached database query results from session state."""
+    keys_to_clear = [k for k in list(st.session_state.keys()) if k.startswith("cache_db_")]
+    for k in keys_to_clear:
+        del st.session_state[k]
+
+
+def get_cached_user_records(store: Any, username: str) -> List[Any]:
+    key = f"cache_db_user_recs_{username}"
+    if key not in st.session_state:
+        st.session_state[key] = store.get_user_records(username)
+    return st.session_state[key]
+
+
+def get_cached_concept_records(store: Any, concept_id: str, user_id: Optional[str] = None) -> List[Any]:
+    key = f"cache_db_concept_recs_{concept_id}_{user_id}"
+    if key not in st.session_state:
+        st.session_state[key] = store.get_concept_records(concept_id, user_id=user_id)
+    return st.session_state[key]
+
+
+def get_cached_latest_concept_record(store: Any, concept_id: str, user_id: Optional[str] = None) -> Optional[Any]:
+    key = f"cache_db_latest_rec_{concept_id}_{user_id}"
+    if key not in st.session_state:
+        st.session_state[key] = store.get_latest_concept_record(concept_id, user_id=user_id)
+    return st.session_state[key]
+
+
+def get_cached_session_events(store: Any, session_id: str) -> List[Any]:
+    key = f"cache_db_session_events_{session_id}"
+    if key not in st.session_state:
+        st.session_state[key] = store.get_session_events(session_id)
+    return st.session_state[key]
 
 
 def get_provider() -> InternetQAProvider:
@@ -197,6 +228,7 @@ def reset_session(new_topic: str | None = None, advance_variation: bool = False)
     elif advance_variation:
         st.session_state["topic_variation_offset"] = st.session_state.get("topic_variation_offset", 0) + 1
 
+    invalidate_db_cache()
     st.session_state.flow_session = None
     st.session_state["ans_area"] = ""
     st.session_state["fu_area"] = ""
@@ -259,7 +291,7 @@ with st.sidebar:
     is_guest = current_user.username == "default_student"
 
     if not is_guest:
-        user_records = store.get_user_records(current_user.username)
+        user_records = get_cached_user_records(store, current_user.username)
         due_count = sum(1 for r in user_records if is_due_for_review(r))
 
         st.markdown(
@@ -272,6 +304,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
         if st.button("🚪 Log Out", use_container_width=True):
+            invalidate_db_cache()
             st.session_state.current_user = User(
                 username="default_student",
                 display_name="Guest Student",
@@ -290,6 +323,7 @@ with st.sidebar:
                 if sub_login:
                     auth_u = store.authenticate_user(u_in, p_in)
                     if auth_u:
+                        invalidate_db_cache()
                         st.session_state.current_user = auth_u
                         st.success(f"Welcome back, {auth_u.display_name}!")
                         reset_session()
@@ -304,6 +338,7 @@ with st.sidebar:
                 if sub_reg:
                     created_u = store.create_user(new_u, new_name, new_p)
                     if created_u:
+                        invalidate_db_cache()
                         st.session_state.current_user = created_u
                         st.success(f"Account created! Welcome, {created_u.display_name}!")
                         reset_session()
@@ -373,6 +408,7 @@ with st.sidebar:
         if latest_rec:
             ff = fast_forward_record(latest_rec, hours=72.0)
             store.save_concept_record(ff)
+            invalidate_db_cache()
             st.success(f"Fast-forwarded '{current_cid}' for {flow.user_id} by 72 hours!")
             reset_session()
         else:
@@ -383,7 +419,7 @@ with st.sidebar:
     filter_my_records = st.checkbox("Only show my records", value=True)
     filter_user = flow.user_id if filter_my_records else None
 
-    records = store.get_concept_records(current_cid, user_id=filter_user) if current_cid else []
+    records = get_cached_concept_records(store, current_cid, user_id=filter_user) if current_cid else []
 
     if records:
         rec_data = [
@@ -415,7 +451,8 @@ with st.sidebar:
 
     if st.button("🔌 Reconnect Database", use_container_width=True):
         load_dotenv(override=True)
-        st.session_state.store = get_database_store()
+        invalidate_db_cache()
+        st.session_state.store = get_database_store(force_reconnect=True)
         st.session_state.flow_session = None
         st.rerun()
 
@@ -452,7 +489,7 @@ st.write("")
 
 # Context Card / Prior Encounter Notice (Isolated per student)
 current_cid = flow.question.concept_id if flow.question else "concept"
-prior_records = store.get_concept_records(current_cid, user_id=flow.user_id)
+prior_records = get_cached_concept_records(store, current_cid, user_id=flow.user_id)
 if prior_records and not flow.is_terminated and flow.attempt_count == 0:
     latest = prior_records[-1]
     is_due = is_due_for_review(latest)
@@ -552,11 +589,13 @@ if flow.state == State.ANSWERING:
             else:
                 step_answering(flow, str(answer_submission).strip(), self_rating=rating)
                 step_checking(flow)
+                invalidate_db_cache()
                 st.rerun()
 
     with col_skip:
         if st.button("Skip / Timeout", use_container_width=True):
             step_skip(flow, reason="User skipped")
+            invalidate_db_cache()
             st.rerun()
 
 # State 2: WAITING_FOR_FOLLOWUP (Explanation Check or Mismatch Loop)
@@ -669,11 +708,13 @@ elif flow.state == State.WAITING_FOR_FOLLOWUP:
                     if st.button("Submit Corrected Option", type="primary", use_container_width=True):
                         step_followup(flow, fu_selected_opt)
                         step_checking(flow)
+                        invalidate_db_cache()
                         st.rerun()
 
                 with col_fu_skip:
                     if st.button("Skip Question", use_container_width=True):
                         step_skip(flow, reason="Skipped during follow-up")
+                        invalidate_db_cache()
                         st.rerun()
             else:
                 col_fu_preset = st.columns(2)
@@ -700,16 +741,18 @@ elif flow.state == State.WAITING_FOR_FOLLOWUP:
                         else:
                             step_followup(flow, fu_text.strip())
                             step_checking(flow)
+                            invalidate_db_cache()
                             st.rerun()
 
                 with col_fu_skip:
                     if st.button("Skip Question", use_container_width=True):
                         step_skip(flow, reason="Skipped during follow-up")
+                        invalidate_db_cache()
                         st.rerun()
 
 # State 3: RECORDED (Resolved)
 elif flow.state == State.RECORDED:
-    latest_rec = store.get_latest_concept_record(current_cid, user_id=flow.user_id)
+    latest_rec = get_cached_latest_concept_record(store, current_cid, user_id=flow.user_id)
     is_success = latest_rec and latest_rec.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP)
 
     if is_success:
@@ -750,7 +793,7 @@ elif flow.state == State.SKIPPED:
 # Persistent Event Stream Table
 st.divider()
 st.subheader(f"📜 Persistent {store.engine_name} Event Stream for Student: {flow.user_id}")
-events = store.get_session_events(flow.session_id)
+events = get_cached_session_events(store, flow.session_id)
 if events:
     event_rows = [
         {

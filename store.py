@@ -380,8 +380,35 @@ class MindMeshStore:
 
     def get_latest_concept_record(self, concept_id: str, user_id: Optional[str] = None) -> Optional[ConceptRecord]:
         """Returns the most recent encounter record for a concept and student, if any exists."""
-        records = self.get_concept_records(concept_id, user_id=user_id)
-        return records[-1] if records else None
+        query = (
+            "SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes "
+            "FROM concept_records WHERE concept_id = ?"
+        )
+        params: List[Any] = [concept_id]
+        if user_id:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY created_at DESC LIMIT 1"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            r = cursor.fetchone()
+
+        if not r:
+            return None
+
+        return ConceptRecord(
+            concept_id=r["concept_id"],
+            session_id=r["session_id"],
+            user_id=r["user_id"] if "user_id" in r.keys() else "default_student",
+            confidence=r["confidence"],
+            outcome=Outcome(r["outcome"]),
+            attempts_count=r["attempts_count"],
+            next_review_at=datetime.fromisoformat(r["next_review_at"]),
+            created_at=datetime.fromisoformat(r["created_at"]),
+            notes=r["notes"],
+        )
 
     def get_user_records(self, user_id: str) -> List[ConceptRecord]:
         """Returns all completed concept review records for a given student."""
@@ -471,20 +498,46 @@ class PostgresStore:
 
     def __init__(self, db_url: Optional[str] = None):
         import os
+        from psycopg2.pool import ThreadedConnectionPool
+
         self.db_url = db_url or os.getenv("DATABASE_URL")
         if not self.db_url:
             raise ValueError("DATABASE_URL must be provided for PostgresStore.")
+        self._pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=self.db_url)
         self.init_db()
 
     @contextlib.contextmanager
     def _get_connection(self) -> Generator[Any, None, None]:
-        import psycopg2
         from psycopg2.extras import RealDictCursor
-        conn = psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
+        conn = None
         try:
+            conn = self._pool.getconn()
+            if conn.closed:
+                try:
+                    self._pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                conn = self._pool.getconn()
+            conn.cursor_factory = RealDictCursor
             yield conn
+        except Exception:
+            if conn is not None and not conn.closed:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            raise
         finally:
-            conn.close()
+            if conn is not None:
+                self._pool.putconn(conn)
+
+    def close(self) -> None:
+        """Closes all connections in the pool."""
+        if hasattr(self, "_pool") and self._pool is not None:
+            try:
+                self._pool.closeall()
+            except Exception:
+                pass
 
     def init_db(self) -> None:
         """Initialize PostgreSQL schema and tables."""
@@ -806,8 +859,37 @@ class PostgresStore:
         return records
 
     def get_latest_concept_record(self, concept_id: str, user_id: Optional[str] = None) -> Optional[ConceptRecord]:
-        records = self.get_concept_records(concept_id, user_id=user_id)
-        return records[-1] if records else None
+        query = (
+            "SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes "
+            "FROM concept_records WHERE concept_id = %s"
+        )
+        params: List[Any] = [concept_id]
+        if user_id:
+            query += " AND user_id = %s"
+            params.append(user_id)
+        query += " ORDER BY created_at DESC LIMIT 1"
+
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                r = cursor.fetchone()
+
+        if not r:
+            return None
+
+        next_ts = r["next_review_at"] if isinstance(r["next_review_at"], datetime) else datetime.fromisoformat(str(r["next_review_at"]))
+        created_ts = r["created_at"] if isinstance(r["created_at"], datetime) else datetime.fromisoformat(str(r["created_at"]))
+        return ConceptRecord(
+            concept_id=r["concept_id"],
+            session_id=r["session_id"],
+            user_id=r.get("user_id", "default_student"),
+            confidence=r["confidence"],
+            outcome=Outcome(r["outcome"]),
+            attempts_count=r["attempts_count"],
+            next_review_at=next_ts,
+            created_at=created_ts,
+            notes=r.get("notes"),
+        )
 
     def get_user_records(self, user_id: str) -> List[ConceptRecord]:
         with self._get_connection() as conn:
@@ -899,18 +981,38 @@ def get_last_db_error() -> Optional[str]:
     return LAST_DB_ERROR
 
 
-def get_database_store(db_url: Optional[str] = None) -> Any:
+_GLOBAL_DATABASE_STORE: Optional[Any] = None
+_GLOBAL_STORE_URL: Optional[str] = None
+
+
+def get_database_store(db_url: Optional[str] = None, force_reconnect: bool = False) -> Any:
     """
     Factory function returning PostgresStore if DATABASE_URL is configured,
     otherwise returning MindMeshStore (SQLite).
+    Reuses persistent connection pool singleton unless force_reconnect=True.
     """
-    global LAST_DB_ERROR
+    global LAST_DB_ERROR, _GLOBAL_DATABASE_STORE, _GLOBAL_STORE_URL
     import os
 
     url = db_url or os.getenv("DATABASE_URL")
     if url and (url.startswith("postgresql://") or url.startswith("postgres://")):
+        if (
+            not force_reconnect
+            and _GLOBAL_DATABASE_STORE is not None
+            and getattr(_GLOBAL_DATABASE_STORE, "engine_name", "") == "PostgreSQL"
+            and _GLOBAL_STORE_URL == url
+        ):
+            return _GLOBAL_DATABASE_STORE
+
         try:
+            if _GLOBAL_DATABASE_STORE is not None and hasattr(_GLOBAL_DATABASE_STORE, "close"):
+                try:
+                    _GLOBAL_DATABASE_STORE.close()
+                except Exception:
+                    pass
             store = PostgresStore(db_url=url)
+            _GLOBAL_DATABASE_STORE = store
+            _GLOBAL_STORE_URL = url
             LAST_DB_ERROR = None
             return store
         except Exception as e:
