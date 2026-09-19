@@ -14,6 +14,10 @@ Features:
 
 from __future__ import annotations
 from typing import Any
+import os
+
+from dotenv import load_dotenv
+load_dotenv()
 
 import streamlit as st
 from datetime import datetime, timezone
@@ -292,10 +296,10 @@ with st.sidebar:
         reset_session(new_topic=selected_topic_key)
 
     st.write("— OR —")
-    custom_topic = st.text_input("Search Internet for Any Topic:", placeholder="e.g. Dijkstra, Quicksort, GIL")
-    if st.button("🔍 Fetch from Internet", use_container_width=True):
+    custom_topic = st.text_input("Search & Generate Any Topic:", placeholder="e.g. Trie, Red-Black Tree, Docker, Raft")
+    if st.button("✨ Generate with Gemini AI", use_container_width=True):
         if custom_topic.strip():
-            with st.spinner("Fetching Q&A from internet (Wikipedia API)..."):
+            with st.spinner("Generating authentic CS quiz question via Gemini AI..."):
                 reset_session(new_topic=custom_topic.strip())
 
     st.divider()

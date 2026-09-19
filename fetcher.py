@@ -9,12 +9,17 @@ Owns:
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import urllib.parse
 from typing import Dict, List, Optional
+from dotenv import load_dotenv
 import httpx
 
 from models import Question
+
+load_dotenv()
 
 
 CURATED_TOPICS: Dict[str, Question] = {
@@ -568,11 +573,18 @@ def compute_heavy(n):
 class InternetQAProvider:
     """Fetches concept questions, code context, and rubrics from internet sources and curated catalogs."""
 
-    def __init__(self, timeout: float = 6.0):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: float = 8.0,
+    ):
         self.timeout = timeout
         self.headers = {
             "User-Agent": "MindMesh-Agentathon/1.0 (educational CS study tool; contact@mindmesh.local)"
         }
+        self.gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.gemini_model = model or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
 
     def list_curated_topics(self) -> List[Dict[str, str]]:
         """Returns a list of curated topics available immediately."""
@@ -607,11 +619,96 @@ class InternetQAProvider:
         # 3. Live internet fetch
         return self.fetch_from_internet(cleaned)
 
-    def fetch_from_internet(self, topic_query: str) -> Question:
+    def fetch_with_gemini(self, topic_query: str) -> Optional[Question]:
         """
-        Fetches educational background from the internet (Wikipedia REST API)
-        and constructs an authentic, topic-specific Question with rubric criteria.
+        Synthesizes an authentic, topic-specific multiple-choice question using Google Gemini API.
+        Models the question after reputable quiz websites (GeeksforGeeks, Sanfoundry, LeetCode, Real Python).
         """
+        if not self.gemini_api_key:
+            return None
+
+        clean_slug = self._slugify(topic_query)
+        clean_title = topic_query.strip().replace(" ", "_")
+
+        prompt = (
+            f"You are an expert Computer Science educator creating an authentic, topic-specific multiple choice quiz question "
+            f"for a technical interview or university examination on the topic: '{topic_query}'.\n"
+            f"Model this question directly on real quizzes from authoritative websites such as GeeksforGeeks, Sanfoundry, LeetCode, Real Python, or W3Schools.\n\n"
+            f"Requirements:\n"
+            f"- concept_id: snake_case string identifier\n"
+            f"- topic_name: clear topic title\n"
+            f"- prompt_text: detailed, clear question prompt explaining the scenario\n"
+            f"- code_context: optional relevant code snippet, query, or diagram structure (or null)\n"
+            f"- options: dictionary with exactly 4 keys: 'A', 'B', 'C', 'D' containing distinct, authentic technical choices\n"
+            f"- correct_option: 'B' (designate option B as the correct answer and provide 3 plausible distractors for A, C, and D)\n"
+            f"- explanation: thorough technical explanation why option B is correct and why each distractor fails (min 40 characters)\n"
+            f"- follow_up_prompt: conceptual question verifying deeper understanding and handling of edge cases\n"
+            f"- rubric_criteria: list of 2 to 3 specific criteria for grading\n"
+            f"- quiz_source: name of the modeled quiz source (e.g. 'GeeksforGeeks Algorithms Quiz', 'Sanfoundry Data Structures MCQs', 'LeetCode Explore')\n"
+            f"- source_url: authoritative reference documentation URL starting with https://en.wikipedia.org/\n\n"
+            f"Return ONLY a valid JSON object matching these fields."
+        )
+
+        candidate_models = [
+            self.gemini_model,
+            "gemini-3.1-flash-lite-preview",
+            "gemini-flash-lite-latest",
+            "gemini-flash-latest",
+        ]
+        candidate_models = list(dict.fromkeys(candidate_models))
+
+        for model_name in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_api_key}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.2,
+                },
+            }
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
+                            raw_text = candidates[0]["content"]["parts"][0]["text"]
+                            q_dict = json.loads(raw_text)
+
+                            options = q_dict.get("options")
+                            if isinstance(options, dict) and set(options.keys()) == {"A", "B", "C", "D"}:
+                                src_url = q_dict.get("source_url") or f"https://en.wikipedia.org/wiki/{clean_title}"
+                                if not str(src_url).startswith("http"):
+                                    src_url = f"https://en.wikipedia.org/wiki/{clean_title}"
+                                return Question(
+                                    concept_id=clean_slug,
+                                    topic_name=q_dict.get("topic_name") or topic_query.title(),
+                                    prompt_text=q_dict.get("prompt_text") or f"Question on {topic_query}",
+                                    code_context=q_dict.get("code_context"),
+                                    options=options,
+                                    correct_option=q_dict.get("correct_option") or "B",
+                                    explanation=q_dict.get("explanation") or f"Authoritative explanation for {topic_query}",
+                                    follow_up_prompt=q_dict.get("follow_up_prompt") or f"Explain why the alternatives fail for {topic_query}.",
+                                    rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
+                                    source_url=src_url,
+                                    quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (Gemini AI)",
+                                )
+            except Exception:
+                continue
+
+        return None
+
+    def fetch_from_internet(self, topic_query: str, use_gemini: bool = True) -> Question:
+        """
+        Fetches educational background and constructs an authentic, topic-specific Question:
+        1. Attempts high-quality synthesis via Google Gemini API.
+        2. If unavailable or offline, retrieves from Wikipedia REST API with factual extraction.
+        """
+        if use_gemini and self.gemini_api_key:
+            gemini_q = self.fetch_with_gemini(topic_query)
+            if gemini_q is not None:
+                return gemini_q
         slug = self._slugify(topic_query)
         clean_title = topic_query.strip().replace(" ", "_")
         api_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(clean_title)}"
