@@ -35,17 +35,19 @@ from steps import (
     step_skip,
 )
 try:
-    from store import MindMeshStore, get_database_store
+    from store import MindMeshStore, get_database_store, get_last_db_error
 except (ImportError, AttributeError):
     import importlib
     import store
     importlib.reload(store)
     try:
-        from store import MindMeshStore, get_database_store
+        from store import MindMeshStore, get_database_store, get_last_db_error
     except (ImportError, AttributeError):
         from store import MindMeshStore
         def get_database_store(db_url: Any = None) -> Any:
             return MindMeshStore()
+        def get_last_db_error() -> Any:
+            return None
 
 
 st.set_page_config(
@@ -122,7 +124,11 @@ st.markdown("""
 
 
 def get_store() -> Any:
+    load_dotenv(override=True)
+    target_pg = bool(os.getenv("DATABASE_URL"))
     if "store" not in st.session_state:
+        st.session_state.store = get_database_store()
+    elif target_pg and getattr(st.session_state.store, "engine_name", "") != "PostgreSQL":
         st.session_state.store = get_database_store()
     return st.session_state.store
 
@@ -354,8 +360,23 @@ with st.sidebar:
         st.caption("No encounters recorded yet for this student.")
 
     st.divider()
-    engine_badge = "🐘 PostgreSQL" if store.engine_name == "PostgreSQL" else "🪶 SQLite"
-    st.caption(f"**Database Engine:** {engine_badge}")
+    st.subheader("💾 Database Connection")
+    engine_name = getattr(store, "engine_name", "SQLite")
+    if engine_name == "PostgreSQL":
+        st.success("🐘 **Connected to PostgreSQL** (Neon DB)")
+    else:
+        st.info("🪶 **Connected to SQLite** (Local Fallback)")
+        last_err = get_last_db_error()
+        if os.getenv("DATABASE_URL"):
+            st.warning("⚠️ `DATABASE_URL` found, but currently running on SQLite.")
+            if last_err:
+                st.caption(f"**Error details:** `{last_err[:180]}`")
+
+    if st.button("🔌 Reconnect Database", use_container_width=True):
+        load_dotenv(override=True)
+        st.session_state.store = get_database_store()
+        st.session_state.flow_session = None
+        st.rerun()
 
 
 # Main Interface Header

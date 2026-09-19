@@ -14,6 +14,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from models import ConceptRecord, Outcome, SessionEvent, State, User
 
@@ -25,6 +28,7 @@ __all__ = [
     "MindMeshStore",
     "PostgresStore",
     "get_database_store",
+    "get_last_db_error",
 ]
 
 
@@ -887,20 +891,31 @@ class PostgresStore:
         return "PostgreSQL"
 
 
+LAST_DB_ERROR: Optional[str] = None
+
+
+def get_last_db_error() -> Optional[str]:
+    """Returns the last connection error encountered when attempting PostgreSQL connection."""
+    return LAST_DB_ERROR
+
+
 def get_database_store(db_url: Optional[str] = None) -> Any:
     """
     Factory function returning PostgresStore if DATABASE_URL is configured,
     otherwise returning MindMeshStore (SQLite).
     """
+    global LAST_DB_ERROR
     import os
-    from dotenv import load_dotenv
-    load_dotenv()
 
     url = db_url or os.getenv("DATABASE_URL")
     if url and (url.startswith("postgresql://") or url.startswith("postgres://")):
         try:
-            return PostgresStore(db_url=url)
+            store = PostgresStore(db_url=url)
+            LAST_DB_ERROR = None
+            return store
         except Exception as e:
+            LAST_DB_ERROR = str(e)
             print(f"PostgreSQL connection error: {e}. Falling back to SQLite.")
             return MindMeshStore()
+    LAST_DB_ERROR = None
     return MindMeshStore()
