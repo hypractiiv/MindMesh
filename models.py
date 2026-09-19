@@ -55,10 +55,18 @@ class Question(BaseModel):
     source_url: Optional[str] = None
 
 
+class User(BaseModel):
+    """Registered student account profile."""
+    username: str = Field(min_length=3, max_length=30, description="Unique username handle")
+    display_name: str = Field(min_length=1, max_length=50, description="Student display name")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class ConceptRecord(BaseModel):
     """Persistent summary record for a completed concept encounter."""
     concept_id: str
     session_id: str
+    user_id: str = Field(default="default_student", description="Associated student account ID")
     confidence: int = Field(ge=1, le=5)
     outcome: Outcome
     attempts_count: int = Field(ge=1, le=2)
@@ -71,6 +79,7 @@ class SessionEvent(BaseModel):
     """Append-only audit trail event stored in SQLite."""
     id: Optional[int] = None
     session_id: str
+    user_id: str = Field(default="default_student", description="Associated student account ID")
     step: int
     state: State
     event_type: str

@@ -1,12 +1,14 @@
 """
-app.py - Streamlit demo surface for MindMesh with Dynamic Topic Selection and Internet Q&A Retrieval.
+app.py - Streamlit interface for MindMesh with Multi-User Accounts, Dynamic Topic Selection, and Internet Q&A.
 
 Features:
+- Student account authentication (Sign-Up / Login / Logout / Guest Mode).
+- Student data isolation across learning sessions and review schedules.
 - Dynamic topic selection from curated catalog or live web search (Wikipedia / Educational APIs).
 - Display of internet source citation and rubric criteria.
-- 6-state ribbon highlighting active state.
+- 6-state visual ribbon highlighting the active state.
 - Confidence / Correctness mismatch detection with adaptive backward transition.
-- Persistent SQLite multi-topic event stream and encounter history.
+- Persistent SQLite multi-student event stream and encounter history.
 - Spaced repetition decay and debug time-travel fast-forward.
 """
 
@@ -19,7 +21,7 @@ import pandas as pd
 from decay import fast_forward_record, is_due_for_review
 from fetcher import CURATED_TOPICS, InternetQAProvider
 from flow import FlowSession
-from models import State, Outcome
+from models import State, Outcome, User
 from steps import (
     step_prompting,
     step_answering,
@@ -36,7 +38,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Custom styling for states, mismatch alerts, and source badges
+# Custom styling for states, mismatch alerts, source badges, and profiles
 st.markdown("""
 <style>
     .state-badge {
@@ -74,6 +76,13 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 10px;
     }
+    .user-card {
+        background-color: #f8f9fa;
+        border: 1px solid #dadce0;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-bottom: 12px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,15 +99,27 @@ def get_provider() -> InternetQAProvider:
     return st.session_state.provider
 
 
+def get_current_user() -> User:
+    if "current_user" not in st.session_state:
+        # Default guest profile
+        st.session_state.current_user = User(
+            username="default_student",
+            display_name="Guest Student",
+            created_at=datetime.now(timezone.utc),
+        )
+    return st.session_state.current_user
+
+
 def get_session() -> FlowSession:
     store = get_store()
     provider = get_provider()
+    user = get_current_user()
 
     if "current_topic" not in st.session_state:
         st.session_state.current_topic = "recursion_base_case"
 
     if "flow_session" not in st.session_state or st.session_state.flow_session is None:
-        session = FlowSession(store=store)
+        session = FlowSession(store=store, user_id=user.username)
         q = provider.get_question(st.session_state.current_topic)
         step_prompting(session, question=q)
         st.session_state.flow_session = session
@@ -116,14 +137,75 @@ def reset_session(new_topic: str | None = None):
 
 store = get_store()
 provider = get_provider()
+current_user = get_current_user()
 flow = get_session()
 
-# Sidebar: Topic Selector & History
+# Sidebar: Accounts, Topic Selection, History
 with st.sidebar:
     st.title("🧠 MindMesh Control")
-    st.caption("Internet-Powered Learning-Confidence Tracker")
+    st.caption("Multi-Student Learning-Confidence Tracker")
     st.divider()
 
+    # --- Student Account Panel ---
+    st.subheader("👤 Student Account")
+
+    is_guest = current_user.username == "default_student"
+
+    if not is_guest:
+        user_records = store.get_user_records(current_user.username)
+        due_count = sum(1 for r in user_records if is_due_for_review(r))
+
+        st.markdown(
+            f"""
+            <div class='user-card'>
+                <strong>{current_user.display_name}</strong> <span style='color: #666;'>@{current_user.username}</span><br>
+                <small style='color: #444;'>📚 Reviewed: {len(user_records)} concepts | ⏰ Due: {due_count}</small>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("🚪 Log Out", use_container_width=True):
+            st.session_state.current_user = User(
+                username="default_student",
+                display_name="Guest Student",
+                created_at=datetime.now(timezone.utc),
+            )
+            reset_session()
+    else:
+        st.caption("Currently studying as **Guest Student**.")
+        auth_mode = st.radio("Account Action", ["Log In", "Sign Up"], horizontal=True, label_visibility="collapsed")
+
+        if auth_mode == "Log In":
+            with st.form("login_form"):
+                u_in = st.text_input("Username", key="login_user")
+                p_in = st.text_input("Password", type="password", key="login_pass")
+                sub_login = st.form_submit_button("Log In", use_container_width=True)
+                if sub_login:
+                    auth_u = store.authenticate_user(u_in, p_in)
+                    if auth_u:
+                        st.session_state.current_user = auth_u
+                        st.success(f"Welcome back, {auth_u.display_name}!")
+                        reset_session()
+                    else:
+                        st.error("Invalid username or password.")
+        else:
+            with st.form("signup_form"):
+                new_u = st.text_input("Choose Username (min 3 chars)", key="signup_user")
+                new_name = st.text_input("Your Display Name", key="signup_name")
+                new_p = st.text_input("Choose Password (min 3 chars)", type="password", key="signup_pass")
+                sub_reg = st.form_submit_button("Create Account", use_container_width=True)
+                if sub_reg:
+                    created_u = store.create_user(new_u, new_name, new_p)
+                    if created_u:
+                        st.session_state.current_user = created_u
+                        st.success(f"Account created! Welcome, {created_u.display_name}!")
+                        reset_session()
+                    else:
+                        st.error("Username already taken or invalid details.")
+
+    st.divider()
+
+    # --- Topic Selection ---
     st.subheader("🌐 Topic Selection")
     curated_options = {
         "recursion_base_case": "Recursion: Base Case in List Summation",
@@ -147,7 +229,7 @@ with st.sidebar:
         reset_session(new_topic=selected_topic_key)
 
     st.write("— OR —")
-    custom_topic = st.text_input("Search Internet for Any Topic:", placeholder="e.g. Dijkstra algorithm, Quicksort, GIL")
+    custom_topic = st.text_input("Search Internet for Any Topic:", placeholder="e.g. Dijkstra, Quicksort, GIL")
     if st.button("🔍 Fetch from Internet", use_container_width=True):
         if custom_topic.strip():
             with st.spinner("Fetching Q&A from internet (Wikipedia API)..."):
@@ -173,45 +255,26 @@ with st.sidebar:
     st.subheader("⏱️ Debug Time-Travel")
     current_cid = flow.question.concept_id if flow.question else "recursion_base_case"
     if st.button(f"⏩ Fast-Forward (+72h)", use_container_width=True):
-        latest_rec = store.get_latest_concept_record(current_cid)
+        latest_rec = store.get_latest_concept_record(current_cid, user_id=flow.user_id)
         if latest_rec:
             ff = fast_forward_record(latest_rec, hours=72.0)
             store.save_concept_record(ff)
-            st.success(f"Fast-forwarded '{current_cid}' by 72 hours!")
+            st.success(f"Fast-forwarded '{current_cid}' for {flow.user_id} by 72 hours!")
             reset_session()
         else:
             st.warning(f"No records found for '{current_cid}' to fast forward.")
 
     st.divider()
-    st.subheader("📊 Multi-Topic Encounter History")
-    filter_all = st.checkbox("Show all topics", value=False)
-    target_cid = None if filter_all else current_cid
+    st.subheader("📊 Student Encounter History")
+    filter_my_records = st.checkbox("Only show my records", value=True)
+    filter_user = flow.user_id if filter_my_records else None
 
-    if target_cid:
-        records = store.get_concept_records(target_cid)
-    else:
-        # Get all records across concepts
-        with store._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM concept_records ORDER BY created_at DESC")
-            records_raw = cursor.fetchall()
-            from models import ConceptRecord
-            records = [
-                ConceptRecord(
-                    concept_id=r["concept_id"],
-                    session_id=r["session_id"],
-                    confidence=r["confidence"],
-                    outcome=Outcome(r["outcome"]),
-                    attempts_count=r["attempts_count"],
-                    next_review_at=datetime.fromisoformat(r["next_review_at"]),
-                    created_at=datetime.fromisoformat(r["created_at"]),
-                )
-                for r in records_raw
-            ]
+    records = store.get_concept_records(current_cid, user_id=filter_user) if current_cid else []
 
     if records:
         rec_data = [
             {
+                "Student": r.user_id,
                 "Topic": r.concept_id[:18],
                 "Outcome": r.outcome.value,
                 "Conf": f"{r.confidence}/5",
@@ -221,15 +284,15 @@ with st.sidebar:
         ]
         st.dataframe(pd.DataFrame(rec_data), use_container_width=True, hide_index=True)
     else:
-        st.caption("No encounters recorded yet.")
+        st.caption("No encounters recorded yet for this student.")
 
 
 # Main Interface Header
 st.title("MindMesh: Persistent Learning-Confidence Tracker")
 st.markdown(
-    "**Core Agentic Loop:** Select any topic from the web. The agent evaluates your answer, "
-    "detects confidence/correctness disagreement, executes an adaptive backward transition to ask a targeted follow-up, "
-    "and persists outcomes with spaced repetition scheduling."
+    f"Active Student: **{current_user.display_name}** (`@{current_user.username}`) &nbsp;|&nbsp; "
+    "**Core Agentic Loop:** Evaluates answers against internet rubrics, detects confidence/correctness disagreement, "
+    "executes an adaptive backward transition to ask a targeted follow-up, and schedules reviews via spaced repetition."
 )
 
 # 6-State Visual Ribbon
@@ -254,16 +317,17 @@ for col, s in zip(cols, states):
 
 st.write("")
 
-# Context Card / Prior Encounter Notice
+# Context Card / Prior Encounter Notice (Isolated per student)
 current_cid = flow.question.concept_id if flow.question else "concept"
-prior_records = store.get_concept_records(current_cid)
+prior_records = store.get_concept_records(current_cid, user_id=flow.user_id)
 if prior_records and not flow.is_terminated and flow.attempt_count == 0:
     latest = prior_records[-1]
     is_due = is_due_for_review(latest)
     status_str = "⚠️ DUE FOR REVIEW" if is_due else "Upcoming"
     st.info(
-        f"📅 **Encounter #{len(prior_records) + 1} for `{current_cid}`** — Previous outcome: `{latest.outcome.value}` "
-        f"with confidence **{latest.confidence}/5** on {latest.created_at.strftime('%Y-%m-%d')}. ({status_str})"
+        f"📅 **Encounter #{len(prior_records) + 1} for {current_user.display_name} on `{current_cid}`** — "
+        f"Previous outcome: `{latest.outcome.value}` with confidence **{latest.confidence}/5** "
+        f"on {latest.created_at.strftime('%Y-%m-%d')}. ({status_str})"
     )
 
 # Active Question Card
@@ -390,7 +454,7 @@ elif flow.state == State.WAITING_FOR_FOLLOWUP:
 
 # State 3: RECORDED (Resolved)
 elif flow.state == State.RECORDED:
-    latest_rec = store.get_latest_concept_record(current_cid)
+    latest_rec = store.get_latest_concept_record(current_cid, user_id=flow.user_id)
     is_success = latest_rec and latest_rec.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP)
 
     if is_success:
@@ -405,7 +469,7 @@ elif flow.state == State.RECORDED:
         col_r2.metric("Attempts Taken", latest_rec.attempts_count)
         col_r3.metric("Next Review Due", latest_rec.next_review_at.strftime("%Y-%m-%d %H:%M"))
 
-    st.write(f"**Session ID:** `{flow.session_id}` | **Concept:** `{current_cid}`")
+    st.write(f"**Student:** `{flow.user_id}` | **Session:** `{flow.session_id}` | **Concept:** `{current_cid}`")
 
     if st.button("Start Next Review Cycle", type="primary"):
         reset_session()
@@ -419,7 +483,7 @@ elif flow.state == State.SKIPPED:
 
 # Persistent SQLite Event Stream Table
 st.divider()
-st.subheader("📜 Persistent SQLite Event Stream (Audit Log)")
+st.subheader(f"📜 Persistent SQLite Event Stream for Student: {flow.user_id}")
 events = store.get_session_events(flow.session_id)
 if events:
     event_rows = [

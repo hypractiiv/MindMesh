@@ -29,17 +29,19 @@ class InvalidStateTransition(Exception):
 
 
 class FlowSession:
-    """State machine session tracking active state, history, and transitions."""
+    """State machine session tracking active state, student identity, history, and transitions."""
 
     def __init__(
         self,
         session_id: Optional[str] = None,
         store: Optional[MindMeshStore] = None,
         initial_state: State = State.PROMPTING,
+        user_id: str = "default_student",
     ):
         self.session_id = session_id or str(uuid.uuid4())
         self.store = store or MindMeshStore()
         self.state: State = initial_state
+        self.user_id: str = user_id
         self.step_count: int = 0
         self.question: Optional[Question] = None
         self.answers: List[Answer] = []
@@ -47,7 +49,7 @@ class FlowSession:
 
     @classmethod
     def resume(cls, session_id: str, store: Optional[MindMeshStore] = None) -> FlowSession:
-        """Resumes an existing session from persistent SQLite events."""
+        """Resumes an existing session from persistent SQLite events with student identity intact."""
         active_store = store or MindMeshStore()
         snapshot = active_store.resume_session(session_id)
         if not snapshot["exists"]:
@@ -57,6 +59,7 @@ class FlowSession:
             session_id=session_id,
             store=active_store,
             initial_state=snapshot["current_state"],
+            user_id=snapshot.get("user_id", "default_student"),
         )
         instance.step_count = snapshot["current_step"]
 
@@ -96,6 +99,7 @@ class FlowSession:
         self.state = to_state
         self.store.append_event(
             session_id=self.session_id,
+            user_id=self.user_id,
             step=self.step_count,
             state=self.state,
             event_type=event_type,

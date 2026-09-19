@@ -7,20 +7,22 @@ Owns: SQLite schema, event append/read, concept records, session resumption.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
-from models import ConceptRecord, Outcome, SessionEvent, State
+from models import ConceptRecord, Outcome, SessionEvent, State, User
 
 
 DEFAULT_DB_PATH = Path(__file__).parent / "mindmesh.db"
 
 
 class MindMeshStore:
-    """Manages persistent SQLite storage with append-only event logging and recovery."""
+    """Manages persistent SQLite storage with append-only event logging, recovery, and user accounts."""
 
     def __init__(self, db_path: Optional[Path | str] = None):
         self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -36,13 +38,27 @@ class MindMeshStore:
             conn.close()
 
     def init_db(self) -> None:
-        """Initialize database schema with tables and indexes."""
+        """Initialize database schema with tables, indexes, and user accounts."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            # 1. Users table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
+            # 2. Session events table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS session_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT 'default_student',
                     step INTEGER NOT NULL,
                     state TEXT NOT NULL,
                     event_type TEXT NOT NULL,
@@ -55,11 +71,13 @@ class MindMeshStore:
                 ON session_events(session_id);
             """)
 
+            # 3. Concept records table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS concept_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     concept_id TEXT NOT NULL,
                     session_id TEXT NOT NULL UNIQUE,
+                    user_id TEXT NOT NULL DEFAULT 'default_student',
                     confidence INTEGER NOT NULL,
                     outcome TEXT NOT NULL,
                     attempts_count INTEGER NOT NULL,
@@ -69,10 +87,109 @@ class MindMeshStore:
                 );
             """)
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_concept_records_concept_id 
-                ON concept_records(concept_id);
+                CREATE INDEX IF NOT EXISTS idx_concept_records_concept_user 
+                ON concept_records(concept_id, user_id);
             """)
+
+            # Check and perform migrations if upgrading existing databases
+            cursor.execute("PRAGMA table_info(session_events);")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "user_id" not in columns:
+                cursor.execute("ALTER TABLE session_events ADD COLUMN user_id TEXT DEFAULT 'default_student';")
+
+            cursor.execute("PRAGMA table_info(concept_records);")
+            rec_columns = [row["name"] for row in cursor.fetchall()]
+            if "user_id" not in rec_columns:
+                cursor.execute("ALTER TABLE concept_records ADD COLUMN user_id TEXT DEFAULT 'default_student';")
+
             conn.commit()
+
+    # --- User Account Management ---
+
+    @staticmethod
+    def _hash_password(password: str, salt: str) -> str:
+        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+    def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
+        """Creates a new student account with salted password hashing."""
+        clean_user = username.strip().lower()
+        if not clean_user or len(clean_user) < 3 or len(password) < 3:
+            return None
+
+        salt = secrets.token_hex(16)
+        pwd_hash = self._hash_password(password, salt)
+        now = datetime.now(timezone.utc)
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO users (username, display_name, password_hash, salt, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (clean_user, display_name.strip(), pwd_hash, salt, now.isoformat()),
+                )
+                conn.commit()
+            return User(username=clean_user, display_name=display_name.strip(), created_at=now)
+        except sqlite3.IntegrityError:
+            # Username already taken
+            return None
+
+    def authenticate_user(self, username: str, password: str) -> Optional[User]:
+        """Authenticates credentials against stored salted hash."""
+        clean_user = username.strip().lower()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT username, display_name, password_hash, salt, created_at FROM users WHERE username = ?",
+                (clean_user,),
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        expected_hash = self._hash_password(password, row["salt"])
+        if expected_hash == row["password_hash"]:
+            return User(
+                username=row["username"],
+                display_name=row["display_name"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+        return None
+
+    def get_user(self, username: str) -> Optional[User]:
+        """Fetches a user profile by username."""
+        clean_user = username.strip().lower()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT username, display_name, created_at FROM users WHERE username = ?", (clean_user,))
+            row = cursor.fetchone()
+
+        if row:
+            return User(
+                username=row["username"],
+                display_name=row["display_name"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+        return None
+
+    def list_users(self) -> List[User]:
+        """Lists all registered student profiles."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT username, display_name, created_at FROM users ORDER BY created_at ASC")
+            rows = cursor.fetchall()
+
+        return [
+            User(
+                username=r["username"],
+                display_name=r["display_name"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
 
     def append_event(
         self,
@@ -82,6 +199,7 @@ class MindMeshStore:
         event_type: str,
         payload: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
+        user_id: str = "default_student",
     ) -> SessionEvent:
         """Appends an immutable event to the session event audit log."""
         ts = timestamp or datetime.now(timezone.utc)
@@ -92,10 +210,10 @@ class MindMeshStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO session_events (session_id, step, state, event_type, payload_json, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO session_events (session_id, user_id, step, state, event_type, payload_json, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, step, state.value, event_type, payload_json, ts.isoformat()),
+                (session_id, user_id, step, state.value, event_type, payload_json, ts.isoformat()),
             )
             event_id = cursor.lastrowid
             conn.commit()
@@ -103,6 +221,7 @@ class MindMeshStore:
         return SessionEvent(
             id=event_id,
             session_id=session_id,
+            user_id=user_id,
             step=step,
             state=state,
             event_type=event_type,
@@ -116,7 +235,7 @@ class MindMeshStore:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, session_id, step, state, event_type, payload_json, timestamp
+                SELECT id, session_id, user_id, step, state, event_type, payload_json, timestamp
                 FROM session_events
                 WHERE session_id = ?
                 ORDER BY id ASC
@@ -131,6 +250,7 @@ class MindMeshStore:
                 SessionEvent(
                     id=r["id"],
                     session_id=r["session_id"],
+                    user_id=r["user_id"] if "user_id" in r.keys() else "default_student",
                     step=r["step"],
                     state=State(r["state"]),
                     event_type=r["event_type"],
@@ -140,23 +260,35 @@ class MindMeshStore:
             )
         return events
 
-    def get_all_session_events(self) -> List[SessionEvent]:
-        """Reads all events across all sessions."""
+    def get_all_session_events(self, user_id: Optional[str] = None) -> List[SessionEvent]:
+        """Reads all events across all sessions, optionally filtered by student."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, session_id, step, state, event_type, payload_json, timestamp
-                FROM session_events
-                ORDER BY id ASC
-                """
-            )
+            if user_id:
+                cursor.execute(
+                    """
+                    SELECT id, session_id, user_id, step, state, event_type, payload_json, timestamp
+                    FROM session_events
+                    WHERE user_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (user_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, session_id, user_id, step, state, event_type, payload_json, timestamp
+                    FROM session_events
+                    ORDER BY id ASC
+                    """
+                )
             rows = cursor.fetchall()
 
         return [
             SessionEvent(
                 id=r["id"],
                 session_id=r["session_id"],
+                user_id=r["user_id"] if "user_id" in r.keys() else "default_student",
                 step=r["step"],
                 state=State(r["state"]),
                 event_type=r["event_type"],
@@ -173,12 +305,13 @@ class MindMeshStore:
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO concept_records 
-                (concept_id, session_id, confidence, outcome, attempts_count, next_review_at, created_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.concept_id,
                     record.session_id,
+                    record.user_id,
                     record.confidence,
                     record.outcome.value,
                     record.attempts_count,
@@ -189,19 +322,30 @@ class MindMeshStore:
             )
             conn.commit()
 
-    def get_concept_records(self, concept_id: str) -> List[ConceptRecord]:
-        """Returns full historical encounter records for a concept (never only the latest)."""
+    def get_concept_records(self, concept_id: str, user_id: Optional[str] = None) -> List[ConceptRecord]:
+        """Returns full historical encounter records for a concept, optionally isolated per student."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT concept_id, session_id, confidence, outcome, attempts_count, next_review_at, created_at, notes
-                FROM concept_records
-                WHERE concept_id = ?
-                ORDER BY created_at ASC
-                """,
-                (concept_id,),
-            )
+            if user_id:
+                cursor.execute(
+                    """
+                    SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes
+                    FROM concept_records
+                    WHERE concept_id = ? AND user_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (concept_id, user_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes
+                    FROM concept_records
+                    WHERE concept_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (concept_id,),
+                )
             rows = cursor.fetchall()
 
         records = []
@@ -210,6 +354,7 @@ class MindMeshStore:
                 ConceptRecord(
                     concept_id=r["concept_id"],
                     session_id=r["session_id"],
+                    user_id=r["user_id"] if "user_id" in r.keys() else "default_student",
                     confidence=r["confidence"],
                     outcome=Outcome(r["outcome"]),
                     attempts_count=r["attempts_count"],
@@ -220,10 +365,40 @@ class MindMeshStore:
             )
         return records
 
-    def get_latest_concept_record(self, concept_id: str) -> Optional[ConceptRecord]:
-        """Returns the most recent encounter record for a concept, if any exists."""
-        records = self.get_concept_records(concept_id)
+    def get_latest_concept_record(self, concept_id: str, user_id: Optional[str] = None) -> Optional[ConceptRecord]:
+        """Returns the most recent encounter record for a concept and student, if any exists."""
+        records = self.get_concept_records(concept_id, user_id=user_id)
         return records[-1] if records else None
+
+    def get_user_records(self, user_id: str) -> List[ConceptRecord]:
+        """Returns all completed concept review records for a given student."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT concept_id, session_id, user_id, confidence, outcome, attempts_count, next_review_at, created_at, notes
+                FROM concept_records
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            ConceptRecord(
+                concept_id=r["concept_id"],
+                session_id=r["session_id"],
+                user_id=r["user_id"],
+                confidence=r["confidence"],
+                outcome=Outcome(r["outcome"]),
+                attempts_count=r["attempts_count"],
+                next_review_at=datetime.fromisoformat(r["next_review_at"]),
+                created_at=datetime.fromisoformat(r["created_at"]),
+                notes=r["notes"],
+            )
+            for r in rows
+        ]
 
     def resume_session(self, session_id: str) -> Dict[str, Any]:
         """
@@ -245,6 +420,7 @@ class MindMeshStore:
 
         current_state = events[-1].state
         current_step = events[-1].step
+        user_id = events[-1].user_id
         answers: List[Dict[str, Any]] = []
         verdicts: List[Dict[str, Any]] = []
         question: Optional[Dict[str, Any]] = None
@@ -261,6 +437,7 @@ class MindMeshStore:
 
         return {
             "session_id": session_id,
+            "user_id": user_id,
             "exists": True,
             "current_state": current_state,
             "current_step": current_step,

@@ -2,11 +2,11 @@
 cli.py - Command-Line Interface and 8-Beat Judge Demo Runner for MindMesh.
 
 Usage:
-  python cli.py --demo            # Run automated 8-beat judge demo
-  python cli.py --interactive     # Run interactive student review session (with topic choice)
-  python cli.py --topic <name>    # Run review for a specific internet or curated topic
-  python cli.py --history         # Display persistent SQLite concept records and events
-  python cli.py --fast-forward 72 # Fast-forward review clock by hours
+  python cli.py --demo                      # Run automated 8-beat judge demo
+  python cli.py --interactive               # Run interactive review (prompts for user)
+  python cli.py --user alice --topic binary # Run review for user alice on binary search
+  python cli.py --history                   # Display persistent SQLite concept records
+  python cli.py --fast-forward 72           # Fast-forward review clock by hours
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ def run_judge_demo(delay: float = 0.8) -> None:
             pass
 
     store = MindMeshStore(db_path=db_path)
+    demo_user = "demo_student"
 
     print_banner("MINDMESH: 8-BEAT JUDGE DEMO FLOW")
     print("Agentic Learning-Confidence Tracker (Concept: Recursion Base Case)")
@@ -67,7 +68,7 @@ def run_judge_demo(delay: float = 0.8) -> None:
 
     # BEAT 2
     session_enc1 = "demo-session-enc-1"
-    session1 = FlowSession(session_id=session_enc1, store=store)
+    session1 = FlowSession(session_id=session_enc1, store=store, user_id=demo_user)
     step_prompting(session1, topic="recursion_base_case")
 
     print_beat(2, "Student gives wrong base case and self-rates 4/5", "Create the confidence/correctness mismatch.")
@@ -76,6 +77,7 @@ def run_judge_demo(delay: float = 0.8) -> None:
     print("\nStudent Submission:")
     wrong_answer = "if len(numbers) == 0: return 1"
     self_rating = 4
+    print(f"  Student:     {session1.user_id}")
     print(f"  Answer:      \"{wrong_answer}\"")
     print(f"  Self-Rating: {self_rating}/5 (Highly Confident)")
     step_answering(session1, wrong_answer, self_rating=self_rating)
@@ -111,8 +113,9 @@ def run_judge_demo(delay: float = 0.8) -> None:
     # BEAT 6
     print_beat(6, "Record shows confidence 3 and 'resolved on follow-up'", "Show persistent state.")
     print(f"State transition -> [{session1.state.value}]")
-    rec1 = store.get_latest_concept_record("recursion_base_case")
+    rec1 = store.get_latest_concept_record("recursion_base_case", user_id=demo_user)
     print("Persisted ConceptRecord in SQLite:")
+    print(f"  Student ID:     {rec1.user_id}")
     print(f"  Session ID:     {rec1.session_id}")
     print(f"  Outcome:        {rec1.outcome.value}")
     print(f"  Confidence:     {rec1.confidence} / 5")
@@ -132,12 +135,12 @@ def run_judge_demo(delay: float = 0.8) -> None:
     # BEAT 8
     print_beat(8, "Reopen the concept; show improved first-try outcome", "Prove persistence matters.")
     session_enc2 = "demo-session-enc-2"
-    session2 = FlowSession(session_id=session_enc2, store=store)
+    session2 = FlowSession(session_id=session_enc2, store=store, user_id=demo_user)
     step_prompting(session2, topic="recursion_base_case")
 
     events = store.get_session_events(session_enc2)
     prior_info = events[0].payload.get("prior_history")
-    print("System context loaded from prior encounter:")
+    print(f"System context loaded for {demo_user} from prior encounter:")
     print(f"  Previous encounters: {prior_info['previous_encounters']}")
     print(f"  Last outcome:        {prior_info['last_outcome']}")
     print(f"  Last confidence:     {prior_info['last_confidence']}")
@@ -150,8 +153,9 @@ def run_judge_demo(delay: float = 0.8) -> None:
     step_answering(session2, mastery_answer, self_rating=mastery_rating)
     step_checking(session2)
 
-    rec2 = store.get_latest_concept_record("recursion_base_case")
+    rec2 = store.get_latest_concept_record("recursion_base_case", user_id=demo_user)
     print("\nUpdated Persistence in SQLite:")
+    print(f"  Student:        {rec2.user_id}")
     print(f"  Outcome:        {rec2.outcome.value}")
     print(f"  Confidence:     {rec2.confidence} / 5")
     print(f"  Next Review At: {rec2.next_review_at.strftime('%Y-%m-%d %H:%M:%S UTC')} (+7 days interval)")
@@ -159,10 +163,20 @@ def run_judge_demo(delay: float = 0.8) -> None:
     print_banner("DEMO COMPLETED SUCCESSFULLY")
 
 
-def run_interactive(topic: str | None = None) -> None:
-    """Runs an interactive session with optional topic selection and internet Q&A retrieval."""
+def run_interactive(topic: str | None = None, user_id: str | None = None) -> None:
+    """Runs an interactive session with user accounts and topic selection."""
     provider = InternetQAProvider()
     store = MindMeshStore()
+
+    if not user_id:
+        print_banner("STUDENT LOGIN")
+        user_id = input("Enter student username (e.g. alice, bob, or press Enter for 'default_student'): ").strip()
+        if not user_id:
+            user_id = "default_student"
+
+    # Ensure profile exists
+    if not store.get_user(user_id):
+        store.create_user(user_id, user_id.capitalize(), "pass123")
 
     if not topic:
         print_banner("SELECT TOPIC")
@@ -189,22 +203,22 @@ def run_interactive(topic: str | None = None) -> None:
         else:
             topic = choice_map.get(choice, "recursion_base_case")
 
-    session = FlowSession(store=store)
+    session = FlowSession(store=store, user_id=user_id)
     print(f"\nFetching question for '{topic}' from internet/knowledge base...")
     step_prompting(session, topic=topic)
 
     q = session.question
-    print_banner(f"MINDMESH: {q.topic_name or q.concept_id}")
+    print_banner(f"STUDENT: {user_id} | TOPIC: {q.topic_name or q.concept_id}")
     if q.source_url:
         print(f"Internet Source: {q.source_url}\n")
 
-    # Check prior history
-    records = store.get_concept_records(q.concept_id)
+    # Check prior history for this student
+    records = store.get_concept_records(q.concept_id, user_id=user_id)
     if records:
-        print(f"Welcome back! You have {len(records)} previous review(s) for this concept.")
+        print(f"Welcome back, {user_id}! You have {len(records)} previous review(s) for this concept.")
         print(f"Last outcome: {records[-1].outcome.value} (Confidence: {records[-1].confidence}/5)")
     else:
-        print("Welcome! This is your first encounter for this concept.")
+        print(f"Welcome, {user_id}! This is your first encounter for this concept.")
 
     print(f"\nQuestion:\n{q.prompt_text}")
     if q.code_context:
@@ -240,40 +254,45 @@ def run_interactive(topic: str | None = None) -> None:
         else:
             print(f"\nFollow-up answer was still not complete: {verdict2.objection}")
 
-    rec = store.get_latest_concept_record(q.concept_id)
+    rec = store.get_latest_concept_record(q.concept_id, user_id=user_id)
     print_banner("SESSION COMPLETED")
+    print(f"Student:         {user_id}")
     print(f"Final State:     {session.state.value}")
     print(f"Outcome:         {rec.outcome.value}")
     print(f"Confidence:      {rec.confidence}/5")
     print(f"Next Review Due: {rec.next_review_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
 
-def display_history() -> None:
+def display_history(user_id: str | None = None) -> None:
     store = MindMeshStore()
     with store._get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM concept_records ORDER BY created_at ASC")
+        if user_id:
+            cursor.execute("SELECT * FROM concept_records WHERE user_id = ? ORDER BY created_at ASC", (user_id,))
+        else:
+            cursor.execute("SELECT * FROM concept_records ORDER BY created_at ASC")
         records = cursor.fetchall()
 
-    print_banner("MINDMESH PERSISTENT HISTORY (ALL TOPICS)")
+    title = f"MINDMESH PERSISTENT HISTORY ({f'STUDENT: {user_id}' if user_id else 'ALL STUDENTS'})"
+    print_banner(title)
     if not records:
-        print("No concept records found in database.")
+        print("No concept records found.")
         return
 
-    print(f"{'#':<4} {'Concept':<25} {'Outcome':<24} {'Confidence':<12} {'Next Review':<22}")
-    print("-" * 90)
+    print(f"{'#':<4} {'Student':<16} {'Concept':<25} {'Outcome':<22} {'Conf':<6} {'Next Review':<18}")
+    print("-" * 95)
     for i, r in enumerate(records, start=1):
+        uid = r["user_id"] if "user_id" in r.keys() else "default"
         print(
-            f"{i:<4} {r['concept_id'][:23]:<25} {r['outcome']:<24} {r['confidence']:<12} {r['next_review_at'][:16]:<22}"
+            f"{i:<4} {uid[:14]:<16} {r['concept_id'][:23]:<25} {r['outcome']:<22} {r['confidence']:<6} {r['next_review_at'][:16]:<18}"
         )
-
-    print("\nTotal Events in SQLite Log:", len(store.get_all_session_events()))
 
 
 def main():
     parser = argparse.ArgumentParser(description="MindMesh Learning-Confidence Tracker CLI")
     parser.add_argument("--demo", action="store_true", help="Run the automated 8-beat judge demo")
     parser.add_argument("--interactive", action="store_true", help="Run an interactive session")
+    parser.add_argument("--user", type=str, help="Student username")
     parser.add_argument("--topic", type=str, help="Specify topic name or internet query")
     parser.add_argument("--history", action="store_true", help="View concept history from SQLite")
     parser.add_argument("--fast-forward", type=float, metavar="HOURS", help="Fast-forward the latest review clock by hours")
@@ -282,12 +301,10 @@ def main():
 
     if args.demo:
         run_judge_demo()
-    elif args.topic:
-        run_interactive(topic=args.topic)
-    elif args.interactive:
-        run_interactive()
+    elif args.interactive or args.topic or args.user:
+        run_interactive(topic=args.topic, user_id=args.user)
     elif args.history:
-        display_history()
+        display_history(user_id=args.user)
     elif args.fast_forward is not None:
         store = MindMeshStore()
         rec = store.get_latest_concept_record("recursion_base_case")

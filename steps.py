@@ -37,8 +37,8 @@ def step_prompting(
 
     active_question = session.question
 
-    # Check for prior encounter history in persistent store for this specific concept
-    prior_records = session.store.get_concept_records(active_question.concept_id)
+    # Check for prior encounter history in persistent store for this specific concept and student
+    prior_records = session.store.get_concept_records(active_question.concept_id, user_id=session.user_id)
     prior_history_summary = None
     if prior_records:
         latest = prior_records[-1]
@@ -181,6 +181,7 @@ def step_record(session: FlowSession) -> ConceptRecord:
     record = ConceptRecord(
         concept_id=concept_id,
         session_id=session.session_id,
+        user_id=session.user_id,
         confidence=confidence,
         outcome=outcome,
         attempts_count=len(session.answers),
@@ -218,6 +219,7 @@ def step_skip(
     record = ConceptRecord(
         concept_id=concept_id,
         session_id=session.session_id,
+        user_id=session.user_id,
         confidence=confidence,
         outcome=outcome,
         attempts_count=len(session.answers),
