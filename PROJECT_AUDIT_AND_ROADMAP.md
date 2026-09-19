@@ -301,3 +301,90 @@ docker compose logs -f
 docker compose down
 ```
 
+---
+
+## 6. Verification Commands & Setup (Linux / macOS / Git Bash / WSL)
+
+### 6.1 Environment Activation & Direct Execution
+```bash
+# Activate virtual environment (Linux / macOS / WSL)
+source .venv/bin/activate
+
+# For Git Bash on Windows
+source .venv/Scripts/activate
+
+# Verify Python version & active path
+which python
+python --version
+```
+
+### 6.2 Syntax Verification & Automated Testing
+```bash
+# 1. Compile all Python files to verify syntax
+python -m py_compile app.py store.py fetcher.py flow.py llm.py steps.py decay.py
+
+# 2. Run the complete 60-test automated verification suite
+pytest tests/ -v
+
+# 3. Run specific test groups
+pytest tests/test_postgres_store.py -v
+pytest tests/test_dynamic_topic_variants.py -v
+pytest tests/test_flow_reachability.py -v
+```
+
+### 6.3 Launching the Application
+```bash
+# Run the Streamlit web interface
+streamlit run app.py
+
+# Alternatively, run via python module
+python -m streamlit run app.py
+
+# Run in headless mode on a custom port
+streamlit run app.py --server.port 8501 --server.headless true
+
+# Run terminal CLI interactive mode
+python cli.py
+```
+
+### 6.4 Environment Variables in Bash
+```bash
+# Set environment variables for the current terminal session
+export DATABASE_URL="postgresql://neondb_owner:npg_...@ep-blue-wildflower-b4f5uwhh-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require"
+export GEMINI_API_KEY="AIzaSy..."
+
+# View current environment variable values
+echo "DATABASE_URL: $DATABASE_URL"
+echo "GEMINI_API_KEY: $GEMINI_API_KEY"
+```
+
+### 6.5 Port Troubleshooting & Process Management
+```bash
+# Check which process is listening on Streamlit port 8501
+lsof -i :8501
+# Or using netstat / ss
+ss -lptn 'sport = :8501'
+
+# Inspect running Python or Streamlit processes
+ps aux | grep -E "streamlit|python"
+
+# Force-stop lingering Streamlit processes if port 8501 is locked
+pkill -f "streamlit"
+# Or terminate by port
+kill -9 $(lsof -t -i:8501) 2>/dev/null || true
+```
+
+### 6.6 Docker Compose (Local PostgreSQL)
+```bash
+# Start local PostgreSQL container in background
+docker compose up -d
+
+# Check container status & logs
+docker compose ps
+docker compose logs -f
+
+# Stop local container
+docker compose down
+```
+
+
