@@ -29,8 +29,18 @@ from steps import (
     step_checking,
     step_followup,
     step_skip,
-)
-from store import MindMeshStore, get_database_store
+try:
+    from store import MindMeshStore, get_database_store
+except (ImportError, AttributeError):
+    import importlib
+    import store
+    importlib.reload(store)
+    try:
+        from store import MindMeshStore, get_database_store
+    except (ImportError, AttributeError):
+        from store import MindMeshStore
+        def get_database_store(db_url: Any = None) -> Any:
+            return MindMeshStore()
 
 
 st.set_page_config(

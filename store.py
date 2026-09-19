@@ -20,6 +20,13 @@ from models import ConceptRecord, Outcome, SessionEvent, State, User
 
 DEFAULT_DB_PATH = Path(__file__).parent / "mindmesh.db"
 
+__all__ = [
+    "DEFAULT_DB_PATH",
+    "MindMeshStore",
+    "PostgresStore",
+    "get_database_store",
+]
+
 
 class MindMeshStore:
     """Manages persistent SQLite storage with append-only event logging, recovery, and user accounts."""
