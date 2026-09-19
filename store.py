@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
@@ -19,6 +20,14 @@ from models import ConceptRecord, Outcome, SessionEvent, State, User
 
 
 DEFAULT_DB_PATH = Path(__file__).parent / "mindmesh.db"
+PASSWORD_HASH_ITERATIONS = 200_000
+
+
+def _salt_to_bytes(salt: str) -> bytes:
+    try:
+        return bytes.fromhex(salt)
+    except ValueError:
+        return salt.encode("utf-8")
 
 __all__ = [
     "DEFAULT_DB_PATH",
@@ -117,7 +126,13 @@ class MindMeshStore:
 
     @staticmethod
     def _hash_password(password: str, salt: str) -> str:
-        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        salt_bytes = _salt_to_bytes(salt)
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt_bytes,
+            PASSWORD_HASH_ITERATIONS,
+        ).hex()
 
     def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
         """Creates a new student account with salted password hashing."""
@@ -160,7 +175,7 @@ class MindMeshStore:
             return None
 
         expected_hash = self._hash_password(password, row["salt"])
-        if expected_hash == row["password_hash"]:
+        if hmac.compare_digest(expected_hash, row["password_hash"]):
             return User(
                 username=row["username"],
                 display_name=row["display_name"],
@@ -542,7 +557,13 @@ class PostgresStore:
 
     @staticmethod
     def _hash_password(password: str, salt: str) -> str:
-        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        salt_bytes = _salt_to_bytes(salt)
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt_bytes,
+            PASSWORD_HASH_ITERATIONS,
+        ).hex()
 
     def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
         clean_user = username.strip().lower()
@@ -582,7 +603,7 @@ class PostgresStore:
             return None
 
         expected_hash = self._hash_password(password, row["salt"])
-        if expected_hash == row["password_hash"]:
+        if hmac.compare_digest(expected_hash, row["password_hash"]):
             ts = row["created_at"] if isinstance(row["created_at"], datetime) else datetime.fromisoformat(str(row["created_at"]))
             return User(username=row["username"], display_name=row["display_name"], created_at=ts)
         return None
