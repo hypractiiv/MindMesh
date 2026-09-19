@@ -1,146 +1,240 @@
+"""
+steps.py - Step implementations for MindMesh.
+
+Owns:
+- Step execution for Prompting, Answering, Checking, Waiting for follow-up, Recorded, and Skipped.
+- Integration between FlowSession, LLMEvaluator, and MindMeshStore.
+"""
+
 from __future__ import annotations
 
-from datetime import date
 from typing import Optional
-
+from concepts.recursion_base_case import QUESTION as DEFAULT_QUESTION
 from decay import calculate_next_review
-
-try:
-    from pydantic import BaseModel
-except Exception:  # pragma: no cover - fallback when pydantic is unavailable
-    class BaseModel:  # type: ignore[override]
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-        def model_dump(self):
-            return dict(self.__dict__)
+from fetcher import InternetQAProvider
+from flow import FlowSession
+from llm import LLMEvaluator, get_evaluator
+from models import Answer, ConceptRecord, Outcome, Question, State, Verdict
 
 
-class Answer(BaseModel):
-    concept: str
-    text: str
-    self_rating: int | None
-    attempt: int
+def step_prompting(
+    session: FlowSession,
+    topic: Optional[str] = None,
+    question: Optional[Question] = None,
+) -> None:
+    """
+    Executes Prompting step:
+    Loads target concept question (either specified, fetched from internet, or default),
+    checks prior history for second-encounter context, and transitions session to Answering.
+    """
+    if question is not None:
+        session.question = question
+    elif topic is not None:
+        provider = InternetQAProvider()
+        session.question = provider.get_question(topic)
+    elif session.question is None:
+        session.question = DEFAULT_QUESTION
 
+    active_question = session.question
 
-class Verdict(BaseModel):
-    passed: bool
-    objection: str | None
+    # Check for prior encounter history in persistent store for this specific concept and student
+    prior_records = session.store.get_concept_records(active_question.concept_id, user_id=session.user_id)
+    prior_history_summary = None
+    if prior_records:
+        latest = prior_records[-1]
+        prior_history_summary = {
+            "previous_encounters": len(prior_records),
+            "last_outcome": latest.outcome.value,
+            "last_confidence": latest.confidence,
+            "last_reviewed_at": latest.created_at.isoformat(),
+        }
 
-
-class Question(BaseModel):
-    asked_of: str
-    text: str
-    state: str
-
-
-class ConceptRecord(BaseModel):
-    concept: str
-    confidence: int
-    note: str | None
-    last_reviewed: date
-    next_review: date
-
-
-def answer_capture(*, concept: str, text: str, self_rating: int | None, attempt: int) -> Answer:
-    if self_rating is not None and not (1 <= self_rating <= 5):
-        raise ValueError("self_rating must be between 1 and 5")
-    if attempt < 1:
-        raise ValueError("attempt must be >= 1")
-    return Answer(concept=concept, text=text.strip(), self_rating=self_rating, attempt=attempt)
-
-
-def _evaluate_recursion_base_case(text: str) -> Verdict:
-    normalized = " ".join(text.lower().split())
-    if "ignore the evaluation criteria" in normalized:
-        return Verdict(
-            passed=False,
-            objection="Answer text attempts to override evaluation criteria instead of giving a valid base case.",
-        )
-
-    mentions_empty = any(token in normalized for token in ("empty", "len(list) == 0", "length is 0", "no elements"))
-    returns_zero = "return 0" in normalized or "returns 0" in normalized or "be 0" in normalized
-    returns_one = "return 1" in normalized or "returns 1" in normalized or "be 1" in normalized
-
-    mentions_base_case = "base case" in normalized
-
-    if (mentions_empty and returns_zero) or (returns_zero and mentions_base_case):
-        return Verdict(passed=True, objection=None)
-    if returns_zero and "it needs to be 0" in normalized:
-        return Verdict(passed=True, objection=None)
-    if mentions_empty and returns_one:
-        return Verdict(
-            passed=False,
-            objection="Self-rating and correctness disagree: base case for summing an empty list must return 0, not 1.",
-        )
-    return Verdict(
-        passed=False,
-        objection="Base case not validated: answer must state that sum(empty list) returns 0.",
+    session.transition_to(
+        State.ANSWERING,
+        "QUESTION_LOADED",
+        {
+            "question": active_question.model_dump(),
+            "prior_history": prior_history_summary,
+        },
     )
 
 
-def evaluate(answer: Answer) -> Verdict:
-    if answer.concept != "recursion.base_case":
-        return Verdict(passed=False, objection=f"Unsupported concept '{answer.concept}'.")
-    return _evaluate_recursion_base_case(answer.text)
-
-
-def should_ask_follow_up(answer: Answer, verdict: Verdict) -> bool:
-    if answer.attempt != 1 or answer.self_rating is None:
-        return False
-    if verdict.passed:
-        return answer.self_rating <= 2
-    return answer.self_rating >= 4
-
-
-def follow_up(*, objection: str) -> Question:
-    return Question(
-        asked_of="student",
-        state="waiting",
-        text=(
-            "If the list has one item, your function returns item + sum(empty list). "
-            "What does sum(empty list) need to be for that to give the right answer?"
-            if "empty list" in objection.lower() or "base case" in objection.lower()
-            else "Your confidence and answer result disagree. Please restate the exact base case value and why."
-        ),
+def step_answering(
+    session: FlowSession,
+    student_answer: str,
+    self_rating: int,
+) -> Answer:
+    """
+    Executes Answering step:
+    Captures student's initial answer and self-confidence rating (1-5),
+    persists the event, and transitions session to Checking.
+    """
+    answer = Answer(
+        student_answer=student_answer,
+        self_rating=self_rating,
+        attempt_number=1,
     )
+    session.answers.append(answer)
+
+    session.transition_to(
+        State.CHECKING,
+        "ANSWER_SUBMITTED",
+        {"answer": answer.model_dump()},
+    )
+    return answer
 
 
-def record_concept(
-    *,
-    concept: str,
-    answers: list[Answer],
-    verdicts: list[Verdict],
-    reviewed_on: date,
-    skipped: bool = False,
-) -> ConceptRecord:
-    if skipped:
-        confidence = 1
-        note = "not confirmed - asked, no response"
-        next_review = calculate_next_review(confidence, last_reviewed=reviewed_on, unresolved=True)
-        return ConceptRecord(
-            concept=concept,
-            confidence=confidence,
-            note=note,
-            last_reviewed=reviewed_on,
-            next_review=next_review,
+def step_checking(
+    session: FlowSession,
+    evaluator: Optional[LLMEvaluator] = None,
+) -> Verdict:
+    """
+    Executes Checking step:
+    Invokes centralized LLM evaluator with topic rubric to judge student answer.
+    Detects confidence/correctness mismatch.
+    Routes to WAITING_FOR_FOLLOWUP (on mismatch attempt 1) or RECORDED (on pass or final attempt).
+    """
+    active_evaluator = evaluator or get_evaluator()
+    current_answer = session.answers[-1]
+
+    verdict = active_evaluator.evaluate(
+        current_answer,
+        session_id=session.session_id,
+        question=session.question,
+    )
+    session.verdicts.append(verdict)
+
+    next_state = session.determine_checking_exit(verdict)
+
+    if next_state == State.WAITING_FOR_FOLLOWUP:
+        session.transition_to(
+            State.WAITING_FOR_FOLLOWUP,
+            "FOLLOWUP_REQUESTED",
+            {
+                "verdict": verdict.model_dump(),
+                "objection": verdict.objection,
+                "follow_up_prompt": session.question.follow_up_prompt if session.question else None,
+            },
         )
-
-    passed_first_try = bool(verdicts) and verdicts[0].passed
-    if passed_first_try:
-        first_rating: Optional[int] = answers[0].self_rating if answers else None
-        confidence = first_rating if first_rating is not None else 4
-        note = None
     else:
-        confidence = 3
-        note = "resolved on follow-up, not first attempt"
+        # Transitioning to RECORDED
+        step_record(session)
 
-    next_review = calculate_next_review(confidence, last_reviewed=reviewed_on)
-    return ConceptRecord(
-        concept=concept,
-        confidence=confidence,
-        note=note,
-        last_reviewed=reviewed_on,
-        next_review=next_review,
+    return verdict
+
+
+def step_followup(
+    session: FlowSession,
+    follow_up_answer: str,
+    self_rating: Optional[int] = None,
+) -> Answer:
+    """
+    Executes Waiting for follow-up exit:
+    Student provides a follow-up clarification.
+    Transitions back to Checking for second evaluation.
+    """
+    rating = self_rating or (session.answers[0].self_rating if session.answers else 3)
+    answer = Answer(
+        student_answer=follow_up_answer,
+        self_rating=rating,
+        attempt_number=2,
     )
+    session.answers.append(answer)
+
+    session.transition_to(
+        State.CHECKING,
+        "FOLLOWUP_SUBMITTED",
+        {"answer": answer.model_dump()},
+    )
+    return answer
+
+
+def step_record(session: FlowSession) -> ConceptRecord:
+    """
+    Executes Recorded step:
+    Resolves the final attempt, calculates spaced-repetition next review date,
+    stores ConceptRecord in SQLite, and transitions session to RECORDED.
+    """
+    initial_answer = session.answers[0] if session.answers else None
+    latest_verdict = session.verdicts[-1] if session.verdicts else None
+
+    # Determine outcome & confidence
+    if len(session.answers) == 1:
+        if latest_verdict and latest_verdict.passed:
+            outcome = Outcome.FIRST_TRY_CORRECT
+            confidence = initial_answer.self_rating if initial_answer else 4
+        else:
+            outcome = Outcome.UNRESOLVED
+            confidence = min(initial_answer.self_rating if initial_answer else 1, 2)
+    else:
+        # Follow-up round occurred
+        if latest_verdict and latest_verdict.passed:
+            outcome = Outcome.RESOLVED_ON_FOLLOW_UP
+            confidence = 3  # Matches Beat 6 spec: "Record shows confidence 3 and 'resolved on follow-up'"
+        else:
+            outcome = Outcome.UNRESOLVED
+            confidence = 2
+
+    concept_id = session.question.concept_id if session.question else "recursion_base_case"
+    next_review = calculate_next_review(outcome=outcome, confidence=confidence)
+
+    record = ConceptRecord(
+        concept_id=concept_id,
+        session_id=session.session_id,
+        user_id=session.user_id,
+        confidence=confidence,
+        outcome=outcome,
+        attempts_count=len(session.answers),
+        next_review_at=next_review,
+        notes=f"Completed with {len(session.answers)} attempt(s). Verdict: {'Passed' if latest_verdict and latest_verdict.passed else 'Failed'}",
+    )
+
+    session.store.save_concept_record(record)
+
+    session.transition_to(
+        State.RECORDED,
+        "RECORD_SAVED",
+        {
+            "record": record.model_dump(),
+            "verdict": latest_verdict.model_dump() if latest_verdict else None,
+        },
+    )
+    return record
+
+
+def step_skip(
+    session: FlowSession,
+    reason: str = "timeout",
+) -> ConceptRecord:
+    """
+    Executes Skipped step:
+    Records timeout or non-response, computes degraded spaced repetition date,
+    and transitions session to SKIPPED.
+    """
+    concept_id = session.question.concept_id if session.question else "recursion_base_case"
+    outcome = Outcome.SKIPPED
+    confidence = 1
+    next_review = calculate_next_review(outcome=outcome, confidence=confidence)
+
+    record = ConceptRecord(
+        concept_id=concept_id,
+        session_id=session.session_id,
+        user_id=session.user_id,
+        confidence=confidence,
+        outcome=outcome,
+        attempts_count=len(session.answers),
+        next_review_at=next_review,
+        notes=f"Session skipped or timed out: {reason}",
+    )
+
+    session.store.save_concept_record(record)
+
+    session.transition_to(
+        State.SKIPPED,
+        "SESSION_SKIPPED",
+        {
+            "reason": reason,
+            "record": record.model_dump(),
+        },
+    )
+    return record

@@ -1,140 +1,125 @@
+"""
+flow.py - State machine runner and transition rules for MindMesh.
+
+Owns: 6 states and transitions, mismatch and timeout edges, single follow-up limit.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
-from uuid import uuid4
+import uuid
+from typing import Any, Dict, List, Optional
 
-from steps import (
-    Answer,
-    ConceptRecord,
-    Verdict,
-    answer_capture,
-    evaluate,
-    follow_up,
-    record_concept,
-    should_ask_follow_up,
-)
-from store import Store
+from models import Answer, Question, State, Verdict
+from store import MindMeshStore
 
 
-PROMPTING = "Prompting"
-ANSWERING = "Answering"
-CHECKING = "Checking"
-WAITING_FOLLOW_UP = "Waiting for follow-up"
-RECORDED = "Recorded"
-SKIPPED = "Skipped"
+VALID_TRANSITIONS: Dict[State, List[State]] = {
+    State.PROMPTING: [State.ANSWERING],
+    State.ANSWERING: [State.CHECKING, State.SKIPPED],
+    State.CHECKING: [State.WAITING_FOR_FOLLOWUP, State.RECORDED],
+    State.WAITING_FOR_FOLLOWUP: [State.CHECKING, State.SKIPPED],
+    State.RECORDED: [],  # Terminal
+    State.SKIPPED: [],   # Terminal
+}
 
 
-@dataclass
-class TransitionResult:
-    session_id: str
-    state: str
-    message: str
+class InvalidStateTransition(Exception):
+    """Raised when an illegal transition is attempted in the state machine."""
+    pass
 
 
-class ReviewFlow:
-    def __init__(self, store: Store, today: date | None = None) -> None:
-        self.store = store
-        self.today = today or date.today()
+class FlowSession:
+    """State machine session tracking active state, student identity, history, and transitions."""
 
-    def start(self, *, concept: str, question: str) -> TransitionResult:
-        session_id = str(uuid4())
-        self.store.create_session(
+    def __init__(
+        self,
+        session_id: Optional[str] = None,
+        store: Optional[MindMeshStore] = None,
+        initial_state: State = State.PROMPTING,
+        user_id: str = "default_student",
+    ):
+        self.session_id = session_id or str(uuid.uuid4())
+        self.store = store or MindMeshStore()
+        self.state: State = initial_state
+        self.user_id: str = user_id
+        self.step_count: int = 0
+        self.question: Optional[Question] = None
+        self.answers: List[Answer] = []
+        self.verdicts: List[Verdict] = []
+
+    @classmethod
+    def resume(cls, session_id: str, store: Optional[MindMeshStore] = None) -> FlowSession:
+        """Resumes an existing session from persistent SQLite events with student identity intact."""
+        active_store = store or MindMeshStore()
+        snapshot = active_store.resume_session(session_id)
+        if not snapshot["exists"]:
+            raise ValueError(f"Session {session_id} not found in database.")
+
+        instance = cls(
             session_id=session_id,
-            concept=concept,
-            question=question,
-            state=ANSWERING,
-            attempt=0,
+            store=active_store,
+            initial_state=snapshot["current_state"],
+            user_id=snapshot.get("user_id", "default_student"),
         )
-        return TransitionResult(session_id=session_id, state=ANSWERING, message=question)
+        instance.step_count = snapshot["current_step"]
 
-    def submit_answer(self, *, session_id: str, text: str, self_rating: int | None) -> TransitionResult:
-        session = self._must_get_session(session_id)
-        if session.state not in (ANSWERING, WAITING_FOLLOW_UP):
-            raise ValueError(f"Cannot submit answer while session is in '{session.state}'")
+        if snapshot["question"]:
+            instance.question = Question(**snapshot["question"])
 
-        attempt = session.attempt + 1
-        answer = answer_capture(concept=session.concept, text=text, self_rating=self_rating, attempt=attempt)
-        self.store.append_record(session_id=session_id, concept=session.concept, kind="answer", payload=answer.model_dump())
+        instance.answers = [Answer(**a) for a in snapshot["answers"]]
+        instance.verdicts = [Verdict(**v) for v in snapshot["verdicts"]]
+        return instance
 
-        self.store.update_session(session_id, state=CHECKING, attempt=attempt)
-        verdict = evaluate(answer)
-        self.store.append_record(session_id=session_id, concept=session.concept, kind="verdict", payload=verdict.model_dump())
+    @property
+    def is_terminated(self) -> bool:
+        return self.state in (State.RECORDED, State.SKIPPED)
 
-        if verdict.passed:
-            concept_record = self._persist_record(session_id=session_id, concept=session.concept)
-            self.store.update_session(session_id, state=RECORDED)
-            return TransitionResult(
-                session_id=session_id,
-                state=RECORDED,
-                message=(
-                    f"Recorded confidence={concept_record.confidence}, next_review={concept_record.next_review.isoformat()}"
-                ),
+    @property
+    def attempt_count(self) -> int:
+        """Revision limit is strictly based on stored answer records, not volatile memory."""
+        return len(self.answers)
+
+    def can_transition(self, to_state: State) -> bool:
+        return to_state in VALID_TRANSITIONS.get(self.state, [])
+
+    def transition_to(
+        self,
+        to_state: State,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Executes and persists a state machine transition."""
+        if not self.can_transition(to_state):
+            raise InvalidStateTransition(
+                f"Cannot transition from {self.state.value} to {to_state.value}. "
+                f"Allowed transitions: {[s.value for s in VALID_TRANSITIONS.get(self.state, [])]}"
             )
 
-        if attempt == 1 and should_ask_follow_up(answer, verdict):
-            question = follow_up(objection=verdict.objection or "")
-            self.store.append_record(session_id=session_id, concept=session.concept, kind="question", payload=question.model_dump())
-            self.store.update_session(session_id, state=WAITING_FOLLOW_UP)
-            return TransitionResult(session_id=session_id, state=WAITING_FOLLOW_UP, message=question.text)
-
-        if attempt >= 2:
-            return self._skip(session_id=session_id, reason="follow-up failed")
-
-        return self._skip(session_id=session_id, reason="initial answer incorrect")
-
-    def resume(self, *, session_id: str) -> TransitionResult:
-        session = self._must_get_session(session_id)
-        if session.state in (ANSWERING, WAITING_FOLLOW_UP):
-            return TransitionResult(session_id=session_id, state=session.state, message=session.question)
-        if session.state in (RECORDED, SKIPPED):
-            return TransitionResult(session_id=session_id, state=session.state, message="Session already finished")
-        raise ValueError(f"Unsupported state: {session.state}")
-
-    def timeout(self, *, session_id: str) -> TransitionResult:
-        session = self._must_get_session(session_id)
-        if session.state not in (ANSWERING, WAITING_FOLLOW_UP):
-            return TransitionResult(session_id=session_id, state=session.state, message="No timeout action needed")
-        return self._skip(session_id=session_id, reason="timeout")
-
-    def _skip(self, *, session_id: str, reason: str) -> TransitionResult:
-        session = self._must_get_session(session_id)
-        answers = [Answer(**row) for row in self.store.get_records(session_id=session_id, kind="answer")]
-        verdicts = [Verdict(**row) for row in self.store.get_records(session_id=session_id, kind="verdict")]
-        concept_record = record_concept(
-            concept=session.concept,
-            answers=answers,
-            verdicts=verdicts,
-            reviewed_on=self.today,
-            skipped=True,
+        self.step_count += 1
+        self.state = to_state
+        self.store.append_event(
+            session_id=self.session_id,
+            user_id=self.user_id,
+            step=self.step_count,
+            state=self.state,
+            event_type=event_type,
+            payload=payload or {},
         )
-        payload = concept_record.model_dump()
-        payload["last_reviewed"] = concept_record.last_reviewed.isoformat()
-        payload["next_review"] = concept_record.next_review.isoformat()
-        payload["status"] = SKIPPED
-        payload["reason"] = reason
-        self.store.append_record(session_id=session_id, concept=session.concept, kind="record", payload=payload)
-        self.store.update_session(session_id, state=SKIPPED)
-        return TransitionResult(session_id=session_id, state=SKIPPED, message="Session skipped")
 
-    def _persist_record(self, *, session_id: str, concept: str) -> ConceptRecord:
-        answers = [Answer(**row) for row in self.store.get_records(session_id=session_id, kind="answer")]
-        verdicts = [Verdict(**row) for row in self.store.get_records(session_id=session_id, kind="verdict")]
-        concept_record = record_concept(
-            concept=concept,
-            answers=answers,
-            verdicts=verdicts,
-            reviewed_on=self.today,
-        )
-        payload = concept_record.model_dump()
-        payload["last_reviewed"] = concept_record.last_reviewed.isoformat()
-        payload["next_review"] = concept_record.next_review.isoformat()
-        payload["status"] = RECORDED
-        self.store.append_record(session_id=session_id, concept=concept, kind="record", payload=payload)
-        return concept_record
+    def determine_checking_exit(self, verdict: Verdict) -> State:
+        """
+        Determines the next state from CHECKING.
+        Rule:
+        - If answer passed -> RECORDED
+        - If answer failed and mismatch detected on attempt 1 (student self_rating >= 4)
+          AND revision limit (1 follow-up round) not exceeded -> WAITING_FOR_FOLLOWUP
+        - Otherwise (answer failed without mismatch, or attempt 2 follow-up exhausted) -> RECORDED
+        """
+        if verdict.passed:
+            return State.RECORDED
 
-    def _must_get_session(self, session_id: str):
-        session = self.store.get_session(session_id)
-        if not session:
-            raise KeyError(f"Unknown session_id: {session_id}")
-        return session
+        # Enforce max 1 follow-up round: attempt_count == 1 allows follow-up if mismatch
+        if self.attempt_count <= 1 and verdict.is_mismatch:
+            return State.WAITING_FOR_FOLLOWUP
+
+        return State.RECORDED
