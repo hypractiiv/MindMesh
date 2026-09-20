@@ -551,6 +551,9 @@ def _retry_on_disconnect(func):
     return wrapper
 
 
+_POSTGRES_SCHEMA_INITIALIZED = False
+
+
 class PostgresStore:
     """PostgreSQL storage engine with connection pooling, native JSONB, and upsert handling."""
 
@@ -561,8 +564,9 @@ class PostgresStore:
         self.db_url = db_url or os.getenv("DATABASE_URL")
         if not self.db_url:
             raise ValueError("DATABASE_URL must be provided for PostgresStore.")
+        self._conn_verified_at: Dict[int, float] = {}
         self._pool = ThreadedConnectionPool(
-            minconn=0,
+            minconn=1,
             maxconn=10,
             dsn=self.db_url,
             keepalives=1,
@@ -582,19 +586,25 @@ class PostgresStore:
             try:
                 conn = self._pool.getconn()
                 if conn.closed:
+                    self._conn_verified_at.pop(id(conn), None)
                     self._pool.putconn(conn, close=True)
                     continue
 
-                # Pre-ping to verify the SSL/TCP socket is responsive only if idle >15s
+                # Pre-ping to verify the SSL/TCP socket is responsive only if idle >30s
                 now_ts = time.time()
-                last_ver = getattr(conn, "_last_verified_at", 0)
-                if now_ts - last_ver > 15.0:
+                last_ver = self._conn_verified_at.get(id(conn), 0.0)
+                if now_ts - last_ver > 30.0:
                     with conn.cursor() as ping_cur:
                         ping_cur.execute("SELECT 1")
-                    conn._last_verified_at = now_ts
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    self._conn_verified_at[id(conn)] = now_ts
                 return conn
             except Exception:
                 if conn is not None:
+                    self._conn_verified_at.pop(id(conn), None)
                     try:
                         self._pool.putconn(conn, close=True)
                     except Exception:
@@ -604,9 +614,10 @@ class PostgresStore:
                         self._pool.closeall()
                     except Exception:
                         pass
+                    self._conn_verified_at.clear()
                     time.sleep(0.3)
                     self._pool = ThreadedConnectionPool(
-                        minconn=0,
+                        minconn=1,
                         maxconn=10,
                         dsn=self.db_url,
                         keepalives=1,
@@ -643,12 +654,21 @@ class PostgresStore:
         finally:
             if conn is not None:
                 if is_broken or conn.closed:
+                    self._conn_verified_at.pop(id(conn), None)
                     try:
                         self._pool.putconn(conn, close=True)
                     except Exception:
                         pass
                 else:
-                    self._pool.putconn(conn)
+                    try:
+                        if not conn.closed and conn.status == psycopg2.extensions.STATUS_IN_TRANSACTION:
+                            conn.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        self._pool.putconn(conn)
+                    except Exception:
+                        pass
 
     def close(self) -> None:
         """Closes all connections in the pool."""
@@ -659,10 +679,13 @@ class PostgresStore:
                 pass
 
     def init_db(self) -> None:
-        """Initialize PostgreSQL schema and tables."""
+        """Initialize PostgreSQL schema and tables in a single batched DDL transaction."""
+        global _POSTGRES_SCHEMA_INITIALIZED
+        if _POSTGRES_SCHEMA_INITIALIZED:
+            return
+
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                # 1. Users table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         username VARCHAR(50) PRIMARY KEY,
@@ -672,11 +695,8 @@ class PostgresStore:
                         created_at TIMESTAMPTZ NOT NULL,
                         email VARCHAR(255)
                     );
-                """)
-                cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);")
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);
 
-                # 2. Session events table
-                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS session_events (
                         id SERIAL PRIMARY KEY,
                         session_id VARCHAR(100) NOT NULL,
@@ -687,18 +707,9 @@ class PostgresStore:
                         payload_json JSONB NOT NULL,
                         timestamp TIMESTAMPTZ NOT NULL
                     );
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_session_events_session_id 
-                    ON session_events(session_id);
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_session_events_user_id 
-                    ON session_events(user_id);
-                """)
+                    CREATE INDEX IF NOT EXISTS idx_session_events_session_id ON session_events(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_session_events_user_id ON session_events(user_id);
 
-                # 3. Concept records table
-                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS concept_records (
                         id SERIAL PRIMARY KEY,
                         concept_id VARCHAR(100) NOT NULL,
@@ -711,12 +722,11 @@ class PostgresStore:
                         created_at TIMESTAMPTZ NOT NULL,
                         notes TEXT
                     );
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_concept_records_concept_user 
-                    ON concept_records(concept_id, user_id);
+                    CREATE INDEX IF NOT EXISTS idx_concept_records_concept_user ON concept_records(concept_id, user_id);
+                    CREATE INDEX IF NOT EXISTS idx_concept_records_user_id ON concept_records(user_id);
                 """)
                 conn.commit()
+        _POSTGRES_SCHEMA_INITIALIZED = True
 
     @staticmethod
     def _hash_password(password: str, salt: str) -> str:
@@ -826,9 +836,11 @@ class PostgresStore:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM concept_records WHERE user_id = 'default_student';")
+                    cursor.execute("""
+                        DELETE FROM concept_records WHERE user_id = 'default_student';
+                        DELETE FROM session_events WHERE user_id = 'default_student';
+                    """)
                     recs = cursor.rowcount
-                    cursor.execute("DELETE FROM session_events WHERE user_id = 'default_student';")
                     conn.commit()
                     return recs
         except Exception:

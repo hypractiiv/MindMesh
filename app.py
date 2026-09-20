@@ -479,13 +479,14 @@ def get_session() -> FlowSession:
 
         var_offset = st.session_state.get("topic_variation_offset", 0)
         enc_idx = len(prior_records) + var_offset
+        force_dyn = enc_idx > 0 or bool(prior_questions) or slug not in CURATED_TOPICS
 
         q = provider.get_question(
             cur_topic,
             encounter_index=enc_idx,
             prior_questions=prior_questions,
             shuffle=True,
-            force_dynamic=True,
+            force_dynamic=force_dyn,
         )
         step_prompting(session, question=q)
         st.session_state.flow_session = session
