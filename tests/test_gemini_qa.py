@@ -75,9 +75,10 @@ def test_gemini_question_flow_session(temp_store):
     # Attempt 2: Sound explanation
     step_followup(
         session,
-        "A Trie shares prefixes across keys, allowing O(L) time complexity where L is the key length."
+        f"The option is correct because {q.explanation}. A Trie shares prefix paths across keys."
     )
-    step_checking(session)
+    v_fu = step_checking(session)
+
 
     assert session.state == State.RECORDED
     record = temp_store.get_latest_concept_record(q.concept_id, user_id="student_gemini_test")

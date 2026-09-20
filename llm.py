@@ -40,16 +40,19 @@ class LLMEvaluator:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
     ):
         self.mode = mode
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        # OpenAI Configuration (Primary Live Grader)
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
         self.base_url = (
             base_url
-            or os.getenv("OPENROUTER_BASE_URL")
-            or "https://openrouter.ai/api/v1"
+            or os.getenv("OPENAI_BASE_URL")
+            or ("https://api.openai.com/v1" if os.getenv("OPENAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") else "https://openrouter.ai/api/v1")
         )
-        self.model = model or os.getenv("MINDMESH_MODEL") or "google/gemini-2.0-flash-001"
+        self.model = model or os.getenv("OPENAI_MODEL") or os.getenv("MINDMESH_MODEL") or "gpt-4o-mini"
+        # Google Gemini Configuration (Fallback Live Grader)
+        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self.session_call_counts: Dict[str, int] = {}
 
     def get_session_call_count(self, session_id: str) -> int:
@@ -122,12 +125,15 @@ class LLMEvaluator:
         """
         Evaluates a student's answer.
         Enforces spend cap (<=4 calls).
-        Dispatches to Fake or Real evaluator based on configuration.
+        Dispatches to:
+        1. Ground-truth deterministic comparison (for MCQ option choices A/B/C/D)
+        2. OpenAI live model evaluation (Primary)
+        3. Google Gemini model evaluation (Fallback)
+        4. Deterministic rule-based evaluation (Emergency Safety Net)
         """
         self._increment_and_check_spend_limit(session_id)
 
-        # MCQ option selections (Attempt 1 or option correction on Attempt 2)
-        # are checked deterministically against the known ground-truth correct_option:
+        # 1. MCQ option selections are checked deterministically against ground truth:
         if question and question.options and question.correct_option and not is_explanation:
             return self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
 
@@ -138,16 +144,30 @@ class LLMEvaluator:
             verdict = self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
             return verdict
 
-        # Real LLM call for explanation/free-text grading via Gemini API or OpenRouter / OpenAI endpoint
-        try:
-            if self.gemini_api_key and not self.api_key:
-                return self._call_gemini_model(answer, question)
-            return self._call_real_model(answer, question)
-        except Exception as e:
-            # Resilient fallback to rule-based if network/remote fails
-            verdict = self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
-            verdict.reasoning = f"[Fallback: {str(e)[:60]}] {verdict.reasoning or ''}"
-            return verdict
+        fallback_errors: List[str] = []
+
+        # 2. Primary Live Grader: OpenAI
+        if self.api_key:
+            try:
+                return self._call_real_model(answer, question)
+            except Exception as e:
+                fallback_errors.append(f"OpenAI: {str(e)[:60]}")
+
+        # 3. Fallback Live Grader: Google Gemini
+        if self.gemini_api_key:
+            try:
+                verdict = self._call_gemini_model(answer, question)
+                if fallback_errors:
+                    verdict.reasoning = f"[Gemini Fallback: {'; '.join(fallback_errors)}] {verdict.reasoning or ''}"
+                return verdict
+            except Exception as e:
+                fallback_errors.append(f"Gemini: {str(e)[:60]}")
+
+        # 4. Final Emergency Fallback: Deterministic Rule-Based
+        verdict = self._evaluate_rule_based_dynamic(answer, question, is_explanation=is_explanation)
+        if fallback_errors:
+            verdict.reasoning = f"[Rule Fallback: {'; '.join(fallback_errors)}] {verdict.reasoning or ''}"
+        return verdict
 
     def _evaluate_rule_based_dynamic(
         self,

@@ -59,6 +59,9 @@ class Question(BaseModel):
     rubric_criteria: Optional[List[str]] = None
     source_url: Optional[str] = None
     quiz_source: Optional[str] = None
+    source_provider: Optional[str] = "curated"  # "openai", "gemini", "wikipedia", "offline_fallback", "curated"
+    is_fallback: bool = False
+    fallback_chain: Optional[List[str]] = None
 
     def shuffle_options(self, seed: Optional[int] = None) -> Question:
         """

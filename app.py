@@ -761,9 +761,33 @@ with nav_tab1:
             )
 
             if flow.question.quiz_source:
+                prov = getattr(flow.question, "source_provider", None) or "curated"
+                is_fb = getattr(flow.question, "is_fallback", False)
+                badge_html = ""
+                if prov == "openai":
+                    badge_html = "<span style='background: rgba(16, 185, 129, 0.15); color: #34D399; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; margin-left: 8px;'>🤖 OpenAI (Primary)</span>"
+                elif prov == "gemini":
+                    if is_fb:
+                        badge_html = "<span style='background: rgba(139, 92, 246, 0.15); color: #A78BFA; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; margin-left: 8px;'>✨ Gemini (Fallback)</span>"
+                    else:
+                        badge_html = "<span style='background: rgba(99, 102, 241, 0.15); color: #818CF8; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; margin-left: 8px;'>✨ Gemini</span>"
+                elif prov == "offline_fallback" or is_fb:
+                    badge_html = "<span style='background: rgba(245, 158, 11, 0.15); color: #FBBF24; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; margin-left: 8px;'>⚠️ Fallback Mode</span>"
+
+                src_link = f"<a href='{flow.question.source_url}' target='_blank' style='color: #818CF8;'>Source ↗</a>" if flow.question.source_url else ""
+                divider = "&nbsp;|&nbsp;" if src_link else ""
                 st.markdown(
-                    f"<div class='source-pill'>📚 {flow.question.quiz_source} &nbsp;|&nbsp; "
-                    f"<a href='{flow.question.source_url}' target='_blank' style='color: #818CF8;'>Source ↗</a></div>",
+                    f"<div class='source-pill'>📚 {flow.question.quiz_source} {badge_html} {divider} {src_link}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            if getattr(flow.question, "source_provider", None) == "offline_fallback":
+                st.markdown(
+                    """
+                    <div style='background: rgba(245, 158, 11, 0.1); border-left: 3px solid #F59E0B; padding: 8px 12px; border-radius: 4px; margin: 8px 0; font-size: 0.85rem; color: #FCD34D;'>
+                        ⚠️ <strong>Notice:</strong> Question synthesis APIs were unreachable or returned an error. This question was generated via offline heuristic fallback.
+                    </div>
+                    """,
                     unsafe_allow_html=True,
                 )
 
@@ -1072,6 +1096,10 @@ with nav_tab1:
                     <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-top: 6px;'>
                         <span style='color: #94A3B8;'>Next Action</span>
                         <span style='font-weight: 600; color: #38BDF8;'>{"⬅️ Step Back & Clarify" if has_mismatch else "➡️ Advance Loop"}</span>
+                    </div>
+                    <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-top: 6px;'>
+                        <span style='color: #94A3B8;'>Live Grader</span>
+                        <span style='font-weight: 600; color: #A78BFA;'>{"OpenAI (Primary) ➔ Gemini" if (os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")) else "Gemini (Active Fallback)"}</span>
                     </div>
                 </div>
                 <div style='background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 10px 12px;'>

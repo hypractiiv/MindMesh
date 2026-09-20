@@ -577,14 +577,40 @@ class InternetQAProvider:
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
+        gemini_model: Optional[str] = None,
         timeout: float = 8.0,
     ):
         self.timeout = timeout
         self.headers = {
             "User-Agent": "MindMesh-Agentathon/1.0 (educational CS study tool; contact@mindmesh.local)"
         }
-        self.gemini_api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.gemini_model = model or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
+        # OpenAI Configuration (Primary Generator)
+        self.openai_api_key = (
+            api_key
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("OPENROUTER_API_KEY")
+        )
+        self.openai_base_url = (
+            os.getenv("OPENAI_BASE_URL")
+            or ("https://api.openai.com/v1" if os.getenv("OPENAI_API_KEY") and not os.getenv("OPENROUTER_API_KEY") else "https://openrouter.ai/api/v1")
+        )
+        self.openai_model = (
+            model
+            or os.getenv("OPENAI_MODEL")
+            or os.getenv("MINDMESH_MODEL")
+            or "gpt-4o-mini"
+        )
+        # Google Gemini Configuration (Fallback Generator)
+        self.gemini_api_key = (
+            gemini_api_key
+            or os.getenv("GEMINI_API_KEY")
+        )
+        self.gemini_model = (
+            gemini_model
+            or os.getenv("GEMINI_MODEL")
+            or "gemini-3.1-flash-lite-preview"
+        )
         self._client: Optional[httpx.Client] = None
         self._cache: Dict[str, Question] = {}
 
@@ -648,6 +674,119 @@ class InternetQAProvider:
             prior_questions=prior_questions,
         )
 
+    def fetch_with_openai(
+        self,
+        topic_query: str,
+        encounter_index: int = 0,
+        prior_questions: Optional[List[str]] = None,
+        shuffle: bool = True,
+    ) -> Optional[Question]:
+        """
+        Synthesizes an authentic, topic-specific multiple-choice question using OpenAI API (Primary Generator).
+        Models the question after reputable quiz websites (GeeksforGeeks, Sanfoundry, LeetCode, Real Python).
+        Enforces anti-repetition by passing prior questions when the topic is practiced repeatedly.
+        """
+        if not self.openai_api_key:
+            return None
+
+        clean_slug = self._slugify(topic_query)
+        clean_title = topic_query.strip().replace(" ", "_")
+
+        prior_section = ""
+        if prior_questions:
+            recent_pqs = [q.strip() for q in prior_questions if q and q.strip()][-5:]
+            if recent_pqs:
+                bullets = "\n".join(f"- {pq[:160]}..." if len(pq) > 160 else f"- {pq}" for pq in recent_pqs)
+                prior_section = (
+                    f"\nANTI-REPETITION CONSTRAINT (Question #{encounter_index + 1} on this topic):\n"
+                    f"The student has ALREADY answered the following questions on this topic:\n"
+                    f"{bullets}\n\n"
+                    f"CRITICAL REQUIREMENT: Do NOT repeat, rephrase, or ask about the same scenario/function as any of the questions above. "
+                    f"You MUST test a DIFFERENT subtopic, function, algorithmic scenario, failure mode, or edge case within '{topic_query}'.\n"
+                )
+
+        prompt = (
+            f"You are an expert Computer Science educator creating an authentic, topic-specific multiple choice quiz question "
+            f"for a technical interview or university examination on the topic: '{topic_query}'.\n"
+            f"Model this question directly on real quizzes from authoritative websites such as GeeksforGeeks, Sanfoundry, LeetCode, Real Python, or W3Schools.\n"
+            f"{prior_section}\n"
+            f"Requirements:\n"
+            f"- concept_id: snake_case string identifier\n"
+            f"- topic_name: clear topic title\n"
+            f"- prompt_text: detailed, clear question prompt explaining the scenario\n"
+            f"- code_context: optional relevant code snippet, query, or diagram structure (or null)\n"
+            f"- options: dictionary with exactly 4 keys: 'A', 'B', 'C', 'D' containing distinct, authentic technical choices\n"
+            f"- correct_option: randomly choose one of 'A', 'B', 'C', or 'D' as the correct answer (do NOT always choose 'B'; vary the letter and provide 3 plausible distractors for the other letters)\n"
+            f"- explanation: thorough technical explanation why the chosen correct option is correct and why each distractor fails (min 40 characters)\n"
+            f"- follow_up_prompt: conceptual question verifying deeper understanding and handling of edge cases\n"
+            f"- rubric_criteria: list of 2 to 3 specific criteria for grading\n"
+            f"- quiz_source: name of the modeled quiz source (e.g. 'GeeksforGeeks Algorithms Quiz', 'Sanfoundry Data Structures MCQs', 'LeetCode Explore')\n"
+            f"- source_url: authoritative reference documentation URL starting with https://en.wikipedia.org/\n\n"
+            f"Return ONLY a valid JSON object matching these fields."
+        )
+
+        cache_key = f"openai:{clean_slug}:{encounter_index}:{hash(tuple(prior_questions or []))}"
+        if cache_key in self._cache:
+            cached_q = self._cache[cache_key]
+            return cached_q.shuffle_options() if shuffle else cached_q
+
+        client = self._get_http_client()
+        headers = {
+            "Authorization": f"Bearer {self.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        if "openrouter" in self.openai_base_url.lower():
+            headers["HTTP-Referer"] = "https://github.com/agentathon/mindmesh"
+            headers["X-Title"] = "MindMesh Agentathon"
+
+        payload = {
+            "model": self.openai_model,
+            "messages": [
+                {"role": "system", "content": "You are an expert computer science curriculum author. Output JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+
+        endpoint = f"{self.openai_base_url.rstrip('/')}/chat/completions"
+        try:
+            resp = client.post(endpoint, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_text = data["choices"][0]["message"]["content"]
+                q_dict = json.loads(raw_text)
+
+                options = q_dict.get("options")
+                if isinstance(options, dict) and set(options.keys()) == {"A", "B", "C", "D"}:
+                    src_url = q_dict.get("source_url") or f"https://en.wikipedia.org/wiki/{clean_title}"
+                    if not str(src_url).startswith("http"):
+                        src_url = f"https://en.wikipedia.org/wiki/{clean_title}"
+                    correct_opt = q_dict.get("correct_option")
+                    if correct_opt not in {"A", "B", "C", "D"}:
+                        correct_opt = "B"
+                    q = Question(
+                        concept_id=clean_slug,
+                        topic_name=q_dict.get("topic_name") or topic_query.title(),
+                        prompt_text=q_dict.get("prompt_text") or f"Question on {topic_query}",
+                        code_context=q_dict.get("code_context"),
+                        options=options,
+                        correct_option=correct_opt,
+                        explanation=q_dict.get("explanation") or f"Authoritative explanation for {topic_query}",
+                        follow_up_prompt=q_dict.get("follow_up_prompt") or f"Explain why the alternatives fail for {topic_query}.",
+                        rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
+                        source_url=src_url,
+                        quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (OpenAI)",
+                        source_provider="openai",
+                        is_fallback=False,
+                    )
+                    self._cache[cache_key] = q
+                    return q.shuffle_options() if shuffle else q
+        except Exception:
+            pass
+
+        return None
+
     def fetch_with_gemini(
         self,
         topic_query: str,
@@ -656,7 +795,7 @@ class InternetQAProvider:
         shuffle: bool = True,
     ) -> Optional[Question]:
         """
-        Synthesizes an authentic, topic-specific multiple-choice question using Google Gemini API.
+        Synthesizes an authentic, topic-specific multiple-choice question using Google Gemini API (Fallback Generator).
         Models the question after reputable quiz websites (GeeksforGeeks, Sanfoundry, LeetCode, Real Python).
         Enforces anti-repetition by passing prior questions when the topic is practiced repeatedly.
         """
@@ -699,7 +838,7 @@ class InternetQAProvider:
             f"Return ONLY a valid JSON object matching these fields."
         )
 
-        cache_key = f"{clean_slug}:{encounter_index}:{hash(tuple(prior_questions or []))}"
+        cache_key = f"gemini:{clean_slug}:{encounter_index}:{hash(tuple(prior_questions or []))}"
         if cache_key in self._cache:
             cached_q = self._cache[cache_key]
             return cached_q.shuffle_options() if shuffle else cached_q
@@ -751,6 +890,8 @@ class InternetQAProvider:
                                 rubric_criteria=q_dict.get("rubric_criteria") or [f"Understanding of {topic_query}", "Accurate invariants"],
                                 source_url=src_url,
                                 quiz_source=f"{q_dict.get('quiz_source', 'Authoritative CS Quiz')} (Gemini AI)",
+                                source_provider="gemini",
+                                is_fallback=False,
                             )
                             self._cache[cache_key] = q
                             return q.shuffle_options() if shuffle else q
@@ -762,6 +903,7 @@ class InternetQAProvider:
     def fetch_from_internet(
         self,
         topic_query: str,
+        use_openai: bool = True,
         use_gemini: bool = True,
         shuffle: bool = False,
         encounter_index: int = 0,
@@ -769,9 +911,28 @@ class InternetQAProvider:
     ) -> Question:
         """
         Fetches educational background and constructs an authentic, topic-specific Question:
-        1. Attempts high-quality synthesis via Google Gemini API with anti-repetition.
-        2. If unavailable or offline, retrieves from Wikipedia REST API with sentence offset.
+        1. Primary: OpenAI API synthesis with anti-repetition.
+        2. Fallback: Google Gemini API synthesis with anti-repetition.
+        3. Secondary Fallback: Wikipedia REST API with sentence offset.
+        4. Final Fallback: Explicitly marked offline template fallback.
         """
+        fallback_trail: List[str] = []
+
+        # 1. Primary: OpenAI
+        if use_openai and self.openai_api_key:
+            openai_q = self.fetch_with_openai(
+                topic_query,
+                encounter_index=encounter_index,
+                prior_questions=prior_questions,
+                shuffle=shuffle,
+            )
+            if openai_q is not None:
+                return openai_q
+            fallback_trail.append("openai")
+        elif use_openai:
+            fallback_trail.append("openai_no_key")
+
+        # 2. Fallback: Google Gemini
         if use_gemini and self.gemini_api_key:
             gemini_q = self.fetch_with_gemini(
                 topic_query,
@@ -780,7 +941,15 @@ class InternetQAProvider:
                 shuffle=shuffle,
             )
             if gemini_q is not None:
+                if fallback_trail:
+                    gemini_q.is_fallback = True
+                    gemini_q.fallback_chain = list(fallback_trail) + ["gemini"]
                 return gemini_q
+            fallback_trail.append("gemini")
+        elif use_gemini:
+            fallback_trail.append("gemini_no_key")
+
+        # 3. Secondary Fallback: Wikipedia REST API
         slug = self._slugify(topic_query)
         clean_title = topic_query.strip().replace(" ", "_")
         api_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(clean_title)}"
@@ -815,55 +984,93 @@ class InternetQAProvider:
                             if "content_urls" in sub_data and "desktop" in sub_data["content_urls"]:
                                 source_url = sub_data["content_urls"]["desktop"].get("page", source_url)
         except Exception:
-            # Resilient offline/network fallback
             pass
 
-        # Synthesize question based on fetched or fallback knowledge
-        if not extract:
-            extract = (
-                f"In computer science, {topic_title} is a core foundational concept requiring precise understanding "
-                f"of execution flow, operational constraints, and algorithmic correctness."
+        if extract:
+            fallback_trail.append("wikipedia")
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", extract) if len(s.strip()) > 20]
+            s_idx = encounter_index % max(1, len(sentences))
+            core_definition = sentences[s_idx] if sentences else extract[:180]
+            secondary_fact = sentences[(s_idx + 1) % len(sentences)] if len(sentences) > 1 else f"Adheres strictly to core computer science invariants of {topic_title}."
+
+            prompt_text = (
+                f"Based on foundational computer science principles regarding '{topic_title}':\n\n"
+                f"\"{core_definition}\"\n\n"
+                f"Which of the following statements accurately characterizes the operational mechanism, "
+                f"primary invariant, or algorithmic complexity associated with {topic_title}?"
             )
+            code_context = f"# Topic: {topic_title}\n# Context: Reference authoritative documentation and standard specifications."
+            follow_up_prompt = (
+                f"Consider standard edge cases and implementation invariants for '{topic_title}'. "
+                f"Why does a naive assumption fail when boundary conditions or resource constraints are tested? "
+                f"Select the corrected option that adheres to core principles."
+            )
+            rubric_criteria = [
+                f"Must accurately reflect the authoritative computer science definition and invariants of {topic_title}.",
+                "Must reject flawed assumptions that ignore boundary conditions or operational constraints.",
+                "Must preserve formal algorithmic or architectural guarantees.",
+            ]
+            options = {
+                "A": f"Executes under an unconstrained heuristic that bypasses formal validation and ignores input boundaries.",
+                "B": f"Accurately adheres to {topic_title} principles: {core_definition[:130]}...",
+                "C": f"Inverts the execution model by eliminating state tracking and omitting boundary termination checks.",
+                "D": f"Restricted strictly to legacy single-threaded architectures and deprecated in modern standard implementations.",
+            }
+            explanation = (
+                f"The authoritative technical definition and requirement for {topic_title} states: {core_definition} "
+                f"{secondary_fact} Options A, C, and D introduce invalid assumptions or flawed operational constraints."
+            )
+            q = Question(
+                concept_id=slug,
+                topic_name=topic_title,
+                prompt_text=prompt_text,
+                code_context=code_context,
+                options=options,
+                correct_option="B",
+                explanation=explanation,
+                follow_up_prompt=follow_up_prompt,
+                rubric_criteria=rubric_criteria,
+                source_url=source_url,
+                quiz_source="Wikipedia Educational Documentation (Fallback)",
+                source_provider="wikipedia",
+                is_fallback=True,
+                fallback_chain=list(fallback_trail),
+            )
+            return q.shuffle_options() if shuffle else q
 
-        # Parse sentences from extract for authentic topic-related content
-        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", extract) if len(s.strip()) > 20]
-        s_idx = encounter_index % max(1, len(sentences))
-        core_definition = sentences[s_idx] if sentences else extract[:180]
-        secondary_fact = sentences[(s_idx + 1) % len(sentences)] if len(sentences) > 1 else f"Adheres strictly to core computer science invariants of {topic_title}."
-
+        # 4. Final Fallback: Emergency Offline Template
+        fallback_trail.append("offline_template")
+        extract = (
+            f"In computer science, {topic_title} is a core foundational concept requiring precise understanding "
+            f"of execution flow, operational constraints, and algorithmic correctness."
+        )
         prompt_text = (
             f"Based on foundational computer science principles regarding '{topic_title}':\n\n"
-            f"\"{core_definition}\"\n\n"
+            f"\"{extract}\"\n\n"
             f"Which of the following statements accurately characterizes the operational mechanism, "
             f"primary invariant, or algorithmic complexity associated with {topic_title}?"
         )
-
         code_context = f"# Topic: {topic_title}\n# Context: Reference authoritative documentation and standard specifications."
-
         follow_up_prompt = (
             f"Consider standard edge cases and implementation invariants for '{topic_title}'. "
             f"Why does a naive assumption fail when boundary conditions or resource constraints are tested? "
             f"Select the corrected option that adheres to core principles."
         )
-
         rubric_criteria = [
             f"Must accurately reflect the authoritative computer science definition and invariants of {topic_title}.",
             "Must reject flawed assumptions that ignore boundary conditions or operational constraints.",
             "Must preserve formal algorithmic or architectural guarantees.",
         ]
-
         options = {
             "A": f"Executes under an unconstrained heuristic that bypasses formal validation and ignores input boundaries.",
-            "B": f"Accurately adheres to {topic_title} principles: {core_definition[:130]}...",
+            "B": f"Accurately adheres to {topic_title} principles: {extract[:130]}...",
             "C": f"Inverts the execution model by eliminating state tracking and omitting boundary termination checks.",
             "D": f"Restricted strictly to legacy single-threaded architectures and deprecated in modern standard implementations.",
         }
-
         explanation = (
-            f"The authoritative technical definition and requirement for {topic_title} states: {core_definition} "
-            f"{secondary_fact} Options A, C, and D introduce invalid assumptions or flawed operational constraints."
+            f"The authoritative technical definition and requirement for {topic_title} states: {extract} "
+            f"Options A, C, and D introduce invalid assumptions or flawed operational constraints."
         )
-
         q = Question(
             concept_id=slug,
             topic_name=topic_title,
@@ -875,7 +1082,10 @@ class InternetQAProvider:
             follow_up_prompt=follow_up_prompt,
             rubric_criteria=rubric_criteria,
             source_url=source_url,
-            quiz_source="Authoritative CS Documentation & Topic Assessment",
+            quiz_source="Offline Fallback Mode (APIs unavailable)",
+            source_provider="offline_fallback",
+            is_fallback=True,
+            fallback_chain=list(fallback_trail),
         )
         return q.shuffle_options() if shuffle else q
 
