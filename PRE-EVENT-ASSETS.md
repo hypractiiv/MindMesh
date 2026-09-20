@@ -85,6 +85,7 @@ The following table documents the entire commit audit log in chronological order
 | **39** | `2026-09-20 10:50:30` | `b169fac` | `b169fac63d8c310ce5cb28d4fb7b3f24f0a05aed` | MindMesh Team | **fix**: Resolve connection ping `AttributeError` and batch DDL to eliminate startup loading hang. |
 | **40** | `2026-09-20 11:15:34` | `912075e` | `912075e8f845cd7e300440b46b90961dac690437` | MindMesh Team | **fix**: Display spaced repetition review time in user local timezone with calendar-aware formatting. |
 | **41** | `2026-09-20 11:44:28` | `b55d457` | `b55d45751436072a41f71f9d7a52debe24fb1b70` | MindMesh Team | **feat**: Topic-wise stat cards with scope switch, recently learned sidebar topics, and working sidebar collapse. |
+| **42** | `2026-09-20 12:30:00` | `c0d3a77` | `pending` | MindMesh Team | **docs**: Add system specification v2 (`spec_v2.md`), update comprehensive `README.md`, and clean `.env.example`. |
 
 ---
 
