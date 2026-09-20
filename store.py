@@ -233,6 +233,16 @@ class MindMeshStore:
             conn.commit()
             return cursor.rowcount > 0
 
+    def flush_guest_data(self) -> int:
+        """Flushes/purges all session events and concept records for 'default_student'."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM concept_records WHERE user_id = 'default_student';")
+            recs = cursor.rowcount
+            cursor.execute("DELETE FROM session_events WHERE user_id = 'default_student';")
+            conn.commit()
+            return recs
+
     def append_event(
         self,
         session_id: str,
@@ -575,9 +585,13 @@ class PostgresStore:
                     self._pool.putconn(conn, close=True)
                     continue
 
-                # Pre-ping to verify the SSL/TCP socket is responsive
-                with conn.cursor() as ping_cur:
-                    ping_cur.execute("SELECT 1")
+                # Pre-ping to verify the SSL/TCP socket is responsive only if idle >15s
+                now_ts = time.time()
+                last_ver = getattr(conn, "_last_verified_at", 0)
+                if now_ts - last_ver > 15.0:
+                    with conn.cursor() as ping_cur:
+                        ping_cur.execute("SELECT 1")
+                    conn._last_verified_at = now_ts
                 return conn
             except Exception:
                 if conn is not None:
@@ -805,6 +819,20 @@ class PostgresStore:
                     return cursor.rowcount > 0
         except Exception:
             return False
+
+    @_retry_on_disconnect
+    def flush_guest_data(self) -> int:
+        """Flushes/purges all session events and concept records for 'default_student' in PostgreSQL."""
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM concept_records WHERE user_id = 'default_student';")
+                    recs = cursor.rowcount
+                    cursor.execute("DELETE FROM session_events WHERE user_id = 'default_student';")
+                    conn.commit()
+                    return recs
+        except Exception:
+            return 0
 
     @_retry_on_disconnect
     def append_event(

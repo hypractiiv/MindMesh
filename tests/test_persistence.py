@@ -95,3 +95,56 @@ def test_concept_records_history_multi_encounter(temp_store):
     assert latest is not None
     assert latest.session_id == "session-enc-2"
     assert latest.confidence == 5
+
+
+def test_flush_guest_data(temp_store):
+    """Verifies that flush_guest_data purges guest records/events without affecting registered users."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+
+    # Guest record and event
+    guest_rec = ConceptRecord(
+        concept_id="recursion",
+        session_id="guest-sess-1",
+        user_id="default_student",
+        confidence=4,
+        outcome=Outcome.FIRST_TRY_CORRECT,
+        attempts_count=1,
+        next_review_at=now + timedelta(days=3),
+        created_at=now,
+    )
+    temp_store.save_concept_record(guest_rec)
+    temp_store.append_event("guest-sess-1", 1, State.RECORDED, "RECORD_SAVED", {}, user_id="default_student")
+
+    # Registered user record and event
+    alice_rec = ConceptRecord(
+        concept_id="recursion",
+        session_id="alice-sess-1",
+        user_id="alice",
+        confidence=5,
+        outcome=Outcome.FIRST_TRY_CORRECT,
+        attempts_count=1,
+        next_review_at=now + timedelta(days=7),
+        created_at=now,
+    )
+    temp_store.save_concept_record(alice_rec)
+    temp_store.append_event("alice-sess-1", 1, State.RECORDED, "RECORD_SAVED", {}, user_id="alice")
+
+    assert len(temp_store.get_user_records("default_student")) == 1
+    assert len(temp_store.get_user_records("alice")) == 1
+
+    # Flush guest data
+    deleted_count = temp_store.flush_guest_data()
+    assert deleted_count == 1
+
+    # Guest records and events must now be empty
+    assert len(temp_store.get_user_records("default_student")) == 0
+    assert len(temp_store.get_all_session_events(user_id="default_student")) == 0
+
+    # Alice's records must remain intact
+    alice_records = temp_store.get_user_records("alice")
+    assert len(alice_records) == 1
+    assert alice_records[0].session_id == "alice-sess-1"
+    assert len(temp_store.get_all_session_events(user_id="alice")) == 1
+

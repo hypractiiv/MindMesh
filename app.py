@@ -377,20 +377,29 @@ def get_cached_user_records(store: Any, username: str) -> List[Any]:
 def get_cached_concept_records(store: Any, concept_id: str, user_id: Optional[str] = None) -> List[Any]:
     key = f"cache_db_concept_recs_{concept_id}_{user_id}"
     if key not in st.session_state:
-        try:
-            st.session_state[key] = store.get_concept_records(concept_id, user_id=user_id)
-        except Exception:
-            return []
+        user_key = f"cache_db_user_recs_{user_id}" if user_id else None
+        if user_key and user_key in st.session_state and st.session_state[user_key] is not None:
+            st.session_state[key] = [r for r in st.session_state[user_key] if r.concept_id == concept_id]
+        else:
+            try:
+                st.session_state[key] = store.get_concept_records(concept_id, user_id=user_id)
+            except Exception:
+                return []
     return st.session_state[key]
 
 
 def get_cached_latest_concept_record(store: Any, concept_id: str, user_id: Optional[str] = None) -> Optional[Any]:
     key = f"cache_db_latest_rec_{concept_id}_{user_id}"
     if key not in st.session_state:
-        try:
-            st.session_state[key] = store.get_latest_concept_record(concept_id, user_id=user_id)
-        except Exception:
-            return None
+        user_key = f"cache_db_user_recs_{user_id}" if user_id else None
+        if user_key and user_key in st.session_state and st.session_state[user_key] is not None:
+            matching = [r for r in st.session_state[user_key] if r.concept_id == concept_id]
+            st.session_state[key] = matching[-1] if matching else None
+        else:
+            try:
+                st.session_state[key] = store.get_latest_concept_record(concept_id, user_id=user_id)
+            except Exception:
+                return None
     return st.session_state[key]
 
 
@@ -427,6 +436,14 @@ def get_current_user() -> User:
             display_name="Guest Student",
             created_at=datetime.now(timezone.utc),
         )
+        if "guest_flushed" not in st.session_state:
+            try:
+                s = get_store()
+                s.flush_guest_data()
+                invalidate_db_cache()
+            except Exception:
+                pass
+            st.session_state["guest_flushed"] = True
     return st.session_state.current_user
 
 
@@ -475,7 +492,15 @@ def get_session() -> FlowSession:
     return st.session_state.flow_session
 
 
-def reset_session(new_topic: str | None = None, advance_variation: bool = False):
+def reset_session(new_topic: str | None = None, advance_variation: bool = False, flush_guest: bool = False):
+    user = st.session_state.get("current_user")
+    if flush_guest or (user and user.username == "default_student" and not advance_variation and new_topic is None):
+        try:
+            s = get_store()
+            s.flush_guest_data()
+            invalidate_db_cache()
+        except Exception:
+            pass
     if new_topic and new_topic != st.session_state.get("current_topic"):
         st.session_state.current_topic = new_topic
         st.session_state["topic_variation_offset"] = 0
@@ -560,24 +585,6 @@ with st.sidebar:
         if st.button("🎲 Next Q", use_container_width=True, help="Synthesize next non-repeating question"):
             reset_session(advance_variation=True)
 
-    st.markdown("##### Quick Topics")
-    quick_topics_data = [
-        ("Recursion", 82),
-        ("Binary Search", 61),
-        ("Graph Traversal", 42),
-        ("Dynamic Programming", 36),
-        ("Operating Systems", 28),
-        ("SQL", 22),
-    ]
-    for topic_name, mastery_pct in quick_topics_data:
-        q_c1, q_c2 = st.columns([2, 1])
-        with q_c1:
-            if st.button(f"📘 {topic_name}", key=f"qt_{topic_name}", use_container_width=True):
-                reset_session(new_topic=topic_name)
-        with q_c2:
-            st.caption(f"**{mastery_pct}%**")
-            st.progress(mastery_pct / 100.0)
-
     st.divider()
 
     # Student Profile Quick Card
@@ -592,6 +599,11 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+    if is_guest:
+        if st.button("🧹 Flush Guest Session Data", key="btn_flush_guest_sidebar", use_container_width=True, help="Purges all session and practice data for this guest session"):
+            store.flush_guest_data()
+            invalidate_db_cache()
+            reset_session()
 
     st.markdown(
         """
@@ -634,59 +646,65 @@ with head_col2:
 all_user_records = get_cached_user_records(store, current_user.username)
 total_attempts = len(all_user_records)
 correct_count = sum(1 for r in all_user_records if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
-accuracy_pct = int((correct_count / total_attempts * 100)) if total_attempts > 0 else 78
-avg_confidence = round(sum(r.confidence for r in all_user_records) / total_attempts, 1) if total_attempts > 0 else 4.1
-mastery_pct = int((sum(1 for r in all_user_records if r.confidence >= 4 and r.outcome == Outcome.FIRST_TRY_CORRECT) / total_attempts * 100)) if total_attempts > 0 else 72
+accuracy_pct = int((correct_count / total_attempts * 100)) if total_attempts > 0 else 0
+avg_confidence = round(sum(r.confidence for r in all_user_records) / total_attempts, 1) if total_attempts > 0 else 0.0
+mastery_count = sum(1 for r in all_user_records if r.confidence >= 4 and r.outcome == Outcome.FIRST_TRY_CORRECT)
+mastery_pct = int((mastery_count / total_attempts * 100)) if total_attempts > 0 else 0
 
 # 4 Stat Cards Row
 s_c1, s_c2, s_c3, s_c4 = st.columns(4)
 with s_c1:
+    trend_attempts = f"↑ {total_attempts} total" if total_attempts > 0 else "New"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(56, 189, 248, 0.15); color: #38BDF8;'>📝</div>
             <div>
                 <div class='stat-label'>Questions Attempted</div>
-                <div class='stat-val'>{max(total_attempts, 12)} <span class='stat-trend'>↑ +3</span></div>
+                <div class='stat-val'>{total_attempts} <span class='stat-trend'>{trend_attempts}</span></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with s_c2:
+    trend_acc = f"{correct_count}/{total_attempts} solved" if total_attempts > 0 else "0 solved"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(139, 92, 246, 0.15); color: #A78BFA;'>🎯</div>
             <div>
                 <div class='stat-label'>Accuracy</div>
-                <div class='stat-val'>{accuracy_pct}% <span class='stat-trend'>↑ +8%</span></div>
+                <div class='stat-val'>{accuracy_pct}% <span class='stat-trend'>{trend_acc}</span></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with s_c3:
+    trend_conf = "Self-rated" if total_attempts > 0 else "Unrated"
+    val_conf = f"{avg_confidence}/5" if total_attempts > 0 else "0.0/5"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(99, 102, 241, 0.15); color: #818CF8;'>🧠</div>
             <div>
                 <div class='stat-label'>Avg. Confidence</div>
-                <div class='stat-val'>{avg_confidence}/5 <span class='stat-trend'>↑ +0.4</span></div>
+                <div class='stat-val'>{val_conf} <span class='stat-trend'>{trend_conf}</span></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with s_c4:
+    trend_mast = f"{mastery_count} mastered" if total_attempts > 0 else "0 mastered"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(245, 158, 11, 0.15); color: #FBBF24;'>⭐</div>
             <div>
                 <div class='stat-label'>Mastery</div>
-                <div class='stat-val'>{mastery_pct}% <span class='stat-trend'>↑ +11%</span></div>
+                <div class='stat-val'>{mastery_pct}% <span class='stat-trend'>{trend_mast}</span></div>
             </div>
         </div>
         """,
@@ -1395,51 +1413,98 @@ with nav_tab3:
 
     col_p1, col_p2 = st.columns([1, 1])
 
+    all_user_records = get_cached_user_records(store, current_user.username)
+
+    # Aggregate topic-level metrics dynamically
+    topic_groups: Dict[str, List[Any]] = {}
+    for rec in all_user_records:
+        topic_groups.setdefault(rec.concept_id, []).append(rec)
+
+    topic_stats = []
+    for cid, recs in topic_groups.items():
+        t_attempts = len(recs)
+        t_correct = sum(1 for r in recs if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
+        t_pct = int((t_correct / t_attempts) * 100) if t_attempts > 0 else 0
+        t_avg_conf = round(sum(r.confidence for r in recs) / t_attempts, 1) if t_attempts > 0 else 0.0
+
+        display_topic = cid.replace("-", " ").replace("_", " ").title()
+
+        if t_pct >= 80 and t_avg_conf >= 3.5:
+            rating_text = "Strong"
+            badge_bg = "rgba(16, 185, 129, 0.15)"
+            badge_clr = "#34D399"
+        elif t_pct >= 50:
+            rating_text = "Developing"
+            badge_bg = "rgba(245, 158, 11, 0.15)"
+            badge_clr = "#FBBF24"
+        else:
+            rating_text = "Needs Practice"
+            badge_bg = "rgba(239, 68, 68, 0.15)"
+            badge_clr = "#F87171"
+
+        topic_stats.append({
+            "concept_id": cid,
+            "name": display_topic,
+            "pct": t_pct,
+            "avg_conf": t_avg_conf,
+            "attempts": t_attempts,
+            "rating_text": rating_text,
+            "badge_bg": badge_bg,
+            "badge_clr": badge_clr,
+        })
+
+    # Sort topics by lowest accuracy first so areas needing attention are prioritized
+    topic_stats.sort(key=lambda x: (x["pct"], x["avg_conf"]))
+
     with col_p1:
         st.markdown("<div class='mm-card'>", unsafe_allow_html=True)
         st.markdown("#### Topic-Wise Performance")
-        sample_topics = [
-            ("Recursion", 82, "Strong"),
-            ("Binary Search", 61, "Developing"),
-            ("Graph Traversal", 42, "Needs Practice"),
-            ("Dynamic Programming", 36, "Needs Practice"),
-            ("Operating Systems", 28, "Needs Practice"),
-            ("SQL", 22, "Needs Practice"),
-        ]
-        for t_name, pct, rating_text in sample_topics:
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                st.write(f"**{t_name}**")
-                st.progress(pct / 100.0)
-            with c2:
-                badge_bg = "rgba(16, 185, 129, 0.15)" if pct >= 70 else ("rgba(245, 158, 11, 0.15)" if pct >= 40 else "rgba(239, 68, 68, 0.15)")
-                badge_clr = "#34D399" if pct >= 70 else ("#FBBF24" if pct >= 40 else "#F87171")
-                st.markdown(f"<span style='background: {badge_bg}; color: {badge_clr}; padding: 2px 8px; border-radius: 8px; font-size: 0.75rem;'>{rating_text}</span>", unsafe_allow_html=True)
+        if topic_stats:
+            for t_item in topic_stats:
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.write(f"**{t_item['name']}** <span style='color: #94A3B8; font-size: 0.8rem;'>({t_item['attempts']} attempt{'s' if t_item['attempts'] != 1 else ''})</span>", unsafe_allow_html=True)
+                    st.progress(t_item["pct"] / 100.0)
+                with c2:
+                    st.markdown(f"<span style='background: {t_item['badge_bg']}; color: {t_item['badge_clr']}; padding: 2px 8px; border-radius: 8px; font-size: 0.75rem;'>{t_item['rating_text']} ({t_item['pct']}%)</span>", unsafe_allow_html=True)
+        else:
+            st.info("No practice records found for this account yet. Practice any topic from the topic engine to begin tracking your mastery!")
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_p2:
         st.markdown("<div class='mm-card'>", unsafe_allow_html=True)
         st.markdown("#### 🎯 Next Recommended Topic")
+
+        if topic_stats:
+            rec_target = topic_stats[0]
+            rec_topic_name = rec_target["name"]
+            if rec_target["pct"] < 80:
+                rec_desc = f"Based on your current accuracy ({rec_target['pct']}%) and confidence ({rec_target['avg_conf']}/5), <strong>{rec_topic_name}</strong> is your top priority for reinforcement."
+            else:
+                rec_desc = f"Great work! You have solid proficiency across topics. Reviewing <strong>{rec_topic_name}</strong> will reinforce long-term mastery."
+        else:
+            rec_topic_name = "Recursion"
+            rec_desc = "Get started with fundamental algorithmic thinking. Practice Recursion to establish your baseline performance metrics."
+
         st.markdown(
-            """
+            f"""
             <div style='background: #0F1629; border: 1px solid #312E81; border-radius: 10px; padding: 14px;'>
-                <div style='font-size: 1.1rem; font-weight: 700; color: #818CF8;'>Graph Traversal (BFS / DFS)</div>
+                <div style='font-size: 1.1rem; font-weight: 700; color: #818CF8;'>{rec_topic_name}</div>
                 <div style='color: #94A3B8; font-size: 0.85rem; margin-top: 4px;'>
-                    Based on your confidence pattern in recursion and tree bounds, Graph Traversal is optimal to reinforce today.
+                    {rec_desc}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
         st.write("")
-        if st.button("Start Practice: Graph Traversal →", type="primary", use_container_width=True):
-            reset_session(new_topic="Graph Traversal")
+        if st.button(f"Start Practice: {rec_topic_name} →", type="primary", use_container_width=True):
+            reset_session(new_topic=rec_topic_name)
 
         st.divider()
 
         st.markdown("#### Spaced Repetition Due Queue")
-        all_recs = get_cached_user_records(store, current_user.username)
-        due_recs = [r for r in all_recs if is_due_for_review(r)]
+        due_recs = [r for r in all_user_records if is_due_for_review(r)]
         if due_recs:
             st.error(f"You have **{len(due_recs)} concept(s)** due for reinforcement right now!")
             if current_user and getattr(current_user, "email", None):
@@ -1505,7 +1570,11 @@ with nav_tab4:
                     display_name="Guest Student",
                     created_at=datetime.now(timezone.utc),
                 )
-                reset_session()
+                try:
+                    store.flush_guest_data()
+                except Exception:
+                    pass
+                reset_session(flush_guest=True)
         else:
             st.info("Currently studying in **Guest Mode**.")
             auth_mode = st.radio("Action", ["Log In", "Create New Account"], horizontal=True)

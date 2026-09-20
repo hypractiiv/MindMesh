@@ -443,7 +443,7 @@ class ReviewSchedulerDaemon:
         self,
         store: Any,
         notifier: ReviewNotifier,
-        check_interval_seconds: int = 30,
+        check_interval_seconds: int = 120,
     ):
         self.store = store
         self.notifier = notifier
@@ -486,9 +486,11 @@ class ReviewSchedulerDaemon:
             logger.warning("ReviewSchedulerDaemon failed to list users: %s", exc)
             return 0
 
-        for user in users:
-            if not getattr(user, "email", None):
-                continue
+        users_with_email = [u for u in users if getattr(u, "email", None)]
+        if not users_with_email:
+            return 0
+
+        for user in users_with_email:
             try:
                 records = self.store.get_user_records(user.username)
             except Exception as exc:
@@ -527,7 +529,7 @@ _global_daemon: Optional[ReviewSchedulerDaemon] = None
 def get_or_start_review_daemon(
     store: Any,
     notifier: Optional[ReviewNotifier] = None,
-    interval_seconds: int = 30,
+    interval_seconds: int = 120,
 ) -> ReviewSchedulerDaemon:
     """Returns or starts the global ReviewSchedulerDaemon background thread."""
     global _global_daemon
