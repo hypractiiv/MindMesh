@@ -104,5 +104,5 @@ flowchart TD
 3. **Reproducibility**: The complete project can be reproduced and tested cleanly using `.venv\Scripts\python.exe -m pytest tests/ -v` (74 tests passing).
 
 **Signed on behalf of the MindMesh Team:**  
-*MindMesh Team (MANISH R, SwamynattanSS, THARAN S K)*  
+*MindMesh Team (MANISH R, SwamynattanSS, THARAN S K, YAZHINI R, GOPIKA V)*  
 *September 20, 2026*

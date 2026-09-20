@@ -8,6 +8,9 @@
 **Event Start Timestamp:** Saturday, September 19, 2026, 09:03:01 AM IST  
 **Document Generated At:** Sunday, September 20, 2026, 08:26:00 AM IST  
 
+> [!NOTE]  
+> This file is also available at [`PRE-EVENT-ASSESTS.md`](PRE-EVENT-ASSESTS.md) and [`PRE-EVENT-ASSETS.md`](PRE-EVENT-ASSETS.md).
+
 ---
 
 ## 1. Pre-Event Asset & Prior Work Attestation
