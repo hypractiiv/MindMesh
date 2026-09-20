@@ -23,8 +23,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from decay import fast_forward_record, is_due_for_review
+from decay import fast_forward_record, is_due_for_review, get_review_interval_description
 from fetcher import CURATED_TOPICS, InternetQAProvider
+from notifier import default_notifier
 from flow import FlowSession
 from models import State, Outcome, User
 from steps import (
@@ -1134,6 +1135,12 @@ with nav_tab1:
         status_color = "#EF4444" if is_due else "#10B981"
         badge_text = "🚨 DUE FOR REVIEW NOW" if is_due else ("🟢 Scheduled Review" if latest_rec else "🟡 Initial Evaluation")
 
+        interval_reason = (
+            get_review_interval_description(latest_rec.outcome, latest_rec.confidence)
+            if latest_rec
+            else ""
+        )
+
         st.markdown(
             f"""
             <div class='mm-card'>
@@ -1150,6 +1157,7 @@ with nav_tab1:
                     <div style='font-weight: 600; color: #F8FAFC; font-size: 0.95rem;'>{current_cid}</div>
                     <div style='margin-top: 8px; font-size: 0.8rem; color: #94A3B8;'>Next Revision Date:</div>
                     <div style='font-size: 1.05rem; font-weight: 700; color: {status_color if is_due else "#818CF8"};'>{due_str}</div>
+                    {f"<div style='font-size: 0.74rem; color: #94A3B8; margin-top: 4px;'>📈 Calculated Interval: <span style=\"color: #A5B4FC;\">{interval_reason}</span></div>" if interval_reason else ""}
                 </div>
             """,
             unsafe_allow_html=True,
@@ -1165,6 +1173,30 @@ with nav_tab1:
                 reset_session()
             else:
                 st.warning(f"Complete at least one encounter on '{current_cid}' before fast-forwarding.")
+
+        # Email Notification dispatch button on card
+        if current_user and getattr(current_user, "email", None):
+            st.caption(f"📧 Reminders: `{current_user.email}`")
+            if st.button("📧 Send Review Reminder Now", key="btn_send_review_card", use_container_width=True, help="Dispatches a formatted spaced repetition revision email"):
+                if latest_rec:
+                    notif = default_notifier.send_review_reminder(
+                        recipient=current_user.email,
+                        student_name=current_user.display_name,
+                        concept_id=current_cid,
+                        topic_name=current_q.topic_name if current_q else current_cid,
+                        outcome=latest_rec.outcome,
+                        confidence=latest_rec.confidence,
+                        next_review_at=latest_rec.next_review_at,
+                    )
+                    if notif.success:
+                        mode_label = "Live SMTP" if notif.mode == "smtp" else "Simulated Delivery"
+                        st.success(f"Email reminder sent to `{current_user.email}` ({mode_label})!")
+                    else:
+                        st.error(f"Failed to send email: {notif.error}")
+                else:
+                    st.info("Complete an encounter first to establish your confidence rating and review schedule.")
+        else:
+            st.caption("📧 *Tip: Add an email in Settings to get automated review reminders.*")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1314,6 +1346,11 @@ with nav_tab3:
         due_recs = [r for r in all_recs if is_due_for_review(r)]
         if due_recs:
             st.error(f"You have **{len(due_recs)} concept(s)** due for reinforcement right now!")
+            if current_user and getattr(current_user, "email", None):
+                if st.button("📧 Email Me All Due Reviews", key="btn_email_due_queue", use_container_width=True):
+                    notifs = default_notifier.notify_due_reviews_for_user(store, current_user)
+                    sent_count = sum(1 for n in notifs if n.success)
+                    st.success(f"Dispatched {sent_count} review notification(s) to `{current_user.email}`!")
             for d in due_recs:
                 if st.button(f"Review Due: {d.concept_id}", key=f"due_btn_{d.concept_id}", use_container_width=True):
                     reset_session(new_topic=d.concept_id)
@@ -1336,6 +1373,32 @@ with nav_tab4:
         st.markdown("#### 👤 Student Profile Management")
         if not is_guest:
             st.write(f"Logged in as: **{current_user.display_name}** (`@{current_user.username}`)")
+            if getattr(current_user, "email", None):
+                st.markdown(f"📧 **Notification Email:** `{current_user.email}`")
+            else:
+                st.caption("⚠️ No notification email registered. Add an email below to receive spaced repetition reminders.")
+
+            with st.expander("✏️ Update Notification Email", expanded=not bool(getattr(current_user, "email", None))):
+                with st.form("set_email_update_form"):
+                    up_email = st.text_input("Email Address", value=current_user.email or "", placeholder="student@university.edu")
+                    if st.form_submit_button("Save Email", use_container_width=True):
+                        if up_email and "@" in up_email:
+                            if store.update_user_email(current_user.username, up_email):
+                                current_user.email = up_email.strip()
+                                st.session_state.current_user = current_user
+                                invalidate_db_cache()
+                                st.success("Email address updated successfully!")
+                                st.rerun()
+                        elif not up_email.strip():
+                            store.update_user_email(current_user.username, None)
+                            current_user.email = None
+                            st.session_state.current_user = current_user
+                            invalidate_db_cache()
+                            st.info("Email address removed.")
+                            st.rerun()
+                        else:
+                            st.error("Please enter a valid email address.")
+
             if st.button("🚪 Log Out", use_container_width=True):
                 invalidate_db_cache()
                 st.session_state.current_user = User(
@@ -1364,9 +1427,10 @@ with nav_tab4:
                 with st.form("set_signup_form"):
                     new_u = st.text_input("Username (min 3 chars)")
                     new_name = st.text_input("Display Name")
+                    new_email = st.text_input("Email Address (for revision notifications)", placeholder="e.g. student@university.edu")
                     new_p = st.text_input("Password (min 3 chars)", type="password")
                     if st.form_submit_button("Register Account", use_container_width=True):
-                        reg_u = store.create_user(new_u, new_name, new_p)
+                        reg_u = store.create_user(new_u, new_name, new_p, email=new_email)
                         if reg_u:
                             invalidate_db_cache()
                             st.session_state.current_user = reg_u
@@ -1374,6 +1438,28 @@ with nav_tab4:
                             reset_session()
                         else:
                             st.error("Could not create account. Username taken or invalid format.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='mm-card'>", unsafe_allow_html=True)
+        st.markdown("#### 📧 Spaced Repetition Email Dispatcher")
+        st.caption("Automated email dispatch for overdue concepts based on confidence levels.")
+
+        mode_badge = "🟢 Live SMTP Delivery" if default_notifier.is_live_smtp_enabled() else "🟡 Simulated Delivery (Zero-Crash Fallback)"
+        st.caption(f"Service Mode: **{mode_badge}**")
+
+        if not is_guest and getattr(current_user, "email", None):
+            if st.button("📤 Scan & Dispatch Due Reviews for My Account", use_container_width=True):
+                notifs = default_notifier.notify_due_reviews_for_user(store, current_user)
+                if not notifs:
+                    st.info("No concepts currently overdue for your account.")
+                else:
+                    for n in notifs:
+                        if n.success:
+                            st.success(f"Dispatched reminder for **{n.concept_id}** to `{n.recipient}` ({n.mode} mode)!")
+                        else:
+                            st.warning(f"Failed to send reminder for **{n.concept_id}**: {n.error}")
+        else:
+            st.caption("Log in with a registered email account to dispatch review notifications.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     with c_s2:

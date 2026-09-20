@@ -61,7 +61,8 @@ class MindMeshStore:
                     display_name TEXT NOT NULL,
                     password_hash TEXT NOT NULL,
                     salt TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    email TEXT
                 );
             """)
 
@@ -96,6 +97,11 @@ class MindMeshStore:
             """)
 
             # Perform column migrations on existing tables BEFORE creating indexes on them
+            cursor.execute("PRAGMA table_info(users);")
+            user_columns = [row["name"] for row in cursor.fetchall()]
+            if "email" not in user_columns:
+                cursor.execute("ALTER TABLE users ADD COLUMN email TEXT;")
+
             cursor.execute("PRAGMA table_info(session_events);")
             columns = [row["name"] for row in cursor.fetchall()]
             if "user_id" not in columns:
@@ -124,12 +130,19 @@ class MindMeshStore:
     def _hash_password(password: str, salt: str) -> str:
         return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
-    def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
-        """Creates a new student account with salted password hashing."""
+    def create_user(
+        self,
+        username: str,
+        display_name: str,
+        password: str,
+        email: Optional[str] = None,
+    ) -> Optional[User]:
+        """Creates a new student account with salted password hashing and optional email."""
         clean_user = username.strip().lower()
         if not clean_user or len(clean_user) < 3 or len(password) < 3:
             return None
 
+        clean_email = email.strip() if email and email.strip() else None
         salt = secrets.token_hex(16)
         pwd_hash = self._hash_password(password, salt)
         now = datetime.now(timezone.utc)
@@ -139,13 +152,13 @@ class MindMeshStore:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO users (username, display_name, password_hash, salt, created_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO users (username, display_name, password_hash, salt, created_at, email)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (clean_user, display_name.strip(), pwd_hash, salt, now.isoformat()),
+                    (clean_user, display_name.strip(), pwd_hash, salt, now.isoformat(), clean_email),
                 )
                 conn.commit()
-            return User(username=clean_user, display_name=display_name.strip(), created_at=now)
+            return User(username=clean_user, display_name=display_name.strip(), email=clean_email, created_at=now)
         except sqlite3.IntegrityError:
             # Username already taken
             return None
@@ -156,7 +169,7 @@ class MindMeshStore:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT username, display_name, password_hash, salt, created_at FROM users WHERE username = ?",
+                "SELECT username, display_name, password_hash, salt, created_at, email FROM users WHERE username = ?",
                 (clean_user,),
             )
             row = cursor.fetchone()
@@ -166,9 +179,11 @@ class MindMeshStore:
 
         expected_hash = self._hash_password(password, row["salt"])
         if expected_hash == row["password_hash"]:
+            email_val = row["email"] if ("email" in (row.keys() if hasattr(row, "keys") else [])) else None
             return User(
                 username=row["username"],
                 display_name=row["display_name"],
+                email=email_val,
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
         return None
@@ -178,13 +193,15 @@ class MindMeshStore:
         clean_user = username.strip().lower()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT username, display_name, created_at FROM users WHERE username = ?", (clean_user,))
+            cursor.execute("SELECT username, display_name, created_at, email FROM users WHERE username = ?", (clean_user,))
             row = cursor.fetchone()
 
         if row:
+            email_val = row["email"] if ("email" in (row.keys() if hasattr(row, "keys") else [])) else None
             return User(
                 username=row["username"],
                 display_name=row["display_name"],
+                email=email_val,
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
         return None
@@ -193,17 +210,28 @@ class MindMeshStore:
         """Lists all registered student profiles."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT username, display_name, created_at FROM users ORDER BY created_at ASC")
+            cursor.execute("SELECT username, display_name, created_at, email FROM users ORDER BY created_at ASC")
             rows = cursor.fetchall()
 
         return [
             User(
                 username=r["username"],
                 display_name=r["display_name"],
+                email=r["email"] if ("email" in (r.keys() if hasattr(r, "keys") else [])) else None,
                 created_at=datetime.fromisoformat(r["created_at"]),
             )
             for r in rows
         ]
+
+    def update_user_email(self, username: str, email: Optional[str]) -> bool:
+        """Updates the notification email address for a registered student."""
+        clean_user = username.strip().lower()
+        clean_email = email.strip() if email and email.strip() else None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET email = ? WHERE username = ?", (clean_email, clean_user))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def append_event(
         self,
@@ -627,9 +655,11 @@ class PostgresStore:
                         display_name VARCHAR(100) NOT NULL,
                         password_hash VARCHAR(64) NOT NULL,
                         salt VARCHAR(32) NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL
+                        created_at TIMESTAMPTZ NOT NULL,
+                        email VARCHAR(255)
                     );
                 """)
+                cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);")
 
                 # 2. Session events table
                 cursor.execute("""
@@ -679,11 +709,18 @@ class PostgresStore:
         return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
     @_retry_on_disconnect
-    def create_user(self, username: str, display_name: str, password: str) -> Optional[User]:
+    def create_user(
+        self,
+        username: str,
+        display_name: str,
+        password: str,
+        email: Optional[str] = None,
+    ) -> Optional[User]:
         clean_user = username.strip().lower()
         if not clean_user or len(clean_user) < 3 or len(password) < 3:
             return None
 
+        clean_email = email.strip() if email and email.strip() else None
         salt = secrets.token_hex(16)
         pwd_hash = self._hash_password(password, salt)
         now = datetime.now(timezone.utc)
@@ -693,13 +730,13 @@ class PostgresStore:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        INSERT INTO users (username, display_name, password_hash, salt, created_at)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO users (username, display_name, password_hash, salt, created_at, email)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
-                        (clean_user, display_name.strip(), pwd_hash, salt, now),
+                        (clean_user, display_name.strip(), pwd_hash, salt, now, clean_email),
                     )
                     conn.commit()
-            return User(username=clean_user, display_name=display_name.strip(), created_at=now)
+            return User(username=clean_user, display_name=display_name.strip(), email=clean_email, created_at=now)
         except Exception:
             return None
 
@@ -709,7 +746,7 @@ class PostgresStore:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT username, display_name, password_hash, salt, created_at FROM users WHERE username = %s",
+                    "SELECT username, display_name, password_hash, salt, created_at, email FROM users WHERE username = %s",
                     (clean_user,),
                 )
                 row = cursor.fetchone()
@@ -720,7 +757,8 @@ class PostgresStore:
         expected_hash = self._hash_password(password, row["salt"])
         if expected_hash == row["password_hash"]:
             ts = row["created_at"] if isinstance(row["created_at"], datetime) else datetime.fromisoformat(str(row["created_at"]))
-            return User(username=row["username"], display_name=row["display_name"], created_at=ts)
+            email_val = row.get("email") if isinstance(row, dict) else (row["email"] if ("email" in (row.keys() if hasattr(row, "keys") else [])) else None)
+            return User(username=row["username"], display_name=row["display_name"], email=email_val, created_at=ts)
         return None
 
     @_retry_on_disconnect
@@ -728,29 +766,45 @@ class PostgresStore:
         clean_user = username.strip().lower()
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT username, display_name, created_at FROM users WHERE username = %s", (clean_user,))
+                cursor.execute("SELECT username, display_name, created_at, email FROM users WHERE username = %s", (clean_user,))
                 row = cursor.fetchone()
 
         if row:
             ts = row["created_at"] if isinstance(row["created_at"], datetime) else datetime.fromisoformat(str(row["created_at"]))
-            return User(username=row["username"], display_name=row["display_name"], created_at=ts)
+            email_val = row.get("email") if isinstance(row, dict) else (row["email"] if ("email" in (row.keys() if hasattr(row, "keys") else [])) else None)
+            return User(username=row["username"], display_name=row["display_name"], email=email_val, created_at=ts)
         return None
 
     @_retry_on_disconnect
     def list_users(self) -> List[User]:
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT username, display_name, created_at FROM users ORDER BY created_at ASC")
+                cursor.execute("SELECT username, display_name, created_at, email FROM users ORDER BY created_at ASC")
                 rows = cursor.fetchall()
 
         return [
             User(
                 username=r["username"],
                 display_name=r["display_name"],
+                email=r.get("email") if isinstance(r, dict) else (r["email"] if ("email" in (r.keys() if hasattr(r, "keys") else [])) else None),
                 created_at=r["created_at"] if isinstance(r["created_at"], datetime) else datetime.fromisoformat(str(r["created_at"])),
             )
             for r in rows
         ]
+
+    @_retry_on_disconnect
+    def update_user_email(self, username: str, email: Optional[str]) -> bool:
+        """Updates the notification email address for a registered student in PostgreSQL."""
+        clean_user = username.strip().lower()
+        clean_email = email.strip() if email and email.strip() else None
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("UPDATE users SET email = %s WHERE username = %s", (clean_email, clean_user))
+                    conn.commit()
+                    return cursor.rowcount > 0
+        except Exception:
+            return False
 
     @_retry_on_disconnect
     def append_event(

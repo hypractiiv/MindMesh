@@ -110,6 +110,7 @@ class User(BaseModel):
     """Registered student account profile."""
     username: str = Field(min_length=3, max_length=30, description="Unique username handle")
     display_name: str = Field(min_length=1, max_length=50, description="Student display name")
+    email: Optional[str] = Field(default=None, description="Student email address for revision notifications")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

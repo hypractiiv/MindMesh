@@ -26,27 +26,44 @@ def temp_store():
 
 
 def test_user_registration_and_authentication(temp_store):
-    """Test user creation, duplicate prevention, and password hashing authentication."""
-    # 1. Register Alice
-    alice = temp_store.create_user(username="alice", display_name="Alice Smith", password="secure_password_123")
+    """Test user creation with email, duplicate prevention, password hashing, and email updates."""
+    # 1. Register Alice with email
+    alice = temp_store.create_user(
+        username="alice",
+        display_name="Alice Smith",
+        password="secure_password_123",
+        email="alice@university.edu",
+    )
     assert alice is not None
     assert alice.username == "alice"
     assert alice.display_name == "Alice Smith"
+    assert alice.email == "alice@university.edu"
 
     # 2. Duplicate username rejected
     dup = temp_store.create_user(username="alice", display_name="Alice 2", password="other_password")
     assert dup is None
 
-    # 3. Successful authentication
+    # 3. Successful authentication preserves email
     auth_alice = temp_store.authenticate_user("alice", "secure_password_123")
     assert auth_alice is not None
     assert auth_alice.username == "alice"
+    assert auth_alice.email == "alice@university.edu"
 
-    # 4. Failed authentication with wrong password
+    # 4. Get user profile contains email
+    fetched = temp_store.get_user("alice")
+    assert fetched is not None
+    assert fetched.email == "alice@university.edu"
+
+    # 5. Update user email
+    assert temp_store.update_user_email("alice", "alice.new@university.edu") is True
+    updated = temp_store.get_user("alice")
+    assert updated.email == "alice.new@university.edu"
+
+    # 6. Failed authentication with wrong password
     bad_auth = temp_store.authenticate_user("alice", "wrong_password")
     assert bad_auth is None
 
-    # 5. Nonexistent user authentication
+    # 7. Nonexistent user authentication
     unknown_auth = temp_store.authenticate_user("charlie", "any_password")
     assert unknown_auth is None
 

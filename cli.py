@@ -183,8 +183,11 @@ def run_interactive(topic: str | None = None, user_id: str | None = None) -> Non
             user_id = "default_student"
 
     # Ensure profile exists
-    if not store.get_user(user_id):
-        store.create_user(user_id, user_id.capitalize(), "pass123")
+    user = store.get_user(user_id)
+    if not user:
+        email = input(f"Enter student email for review reminders (optional, press Enter to skip): ").strip()
+        user = store.create_user(user_id, user_id.capitalize(), "pass123", email=email or None)
+        print(f"Profile created for @{user_id}" + (f" ({email})" if email else "") + ".")
 
     if not topic:
         print_banner("SELECT AUTHENTIC CS QUIZ TOPIC")
@@ -299,15 +302,37 @@ def main():
     parser.add_argument("--topic", type=str, help="Specify topic name or internet query")
     parser.add_argument("--history", action="store_true", help="View concept history from SQLite")
     parser.add_argument("--fast-forward", type=float, metavar="HOURS", help="Fast-forward the latest review clock by hours")
+    parser.add_argument("--notify-due", action="store_true", help="Send email notifications for all overdue concept reviews")
 
     args = parser.parse_args()
 
     if args.demo:
         run_judge_demo()
-    elif args.interactive or args.topic or args.user:
+    elif args.interactive or args.topic or (args.user and not args.history and not args.notify_due):
         run_interactive(topic=args.topic, user_id=args.user)
     elif args.history:
         display_history(user_id=args.user)
+    elif args.notify_due:
+        from notifier import default_notifier
+        store = MindMeshStore()
+        if args.user:
+            user = store.get_user(args.user)
+            if not user:
+                print(f"User '{args.user}' not found.")
+                return
+            results = default_notifier.notify_due_reviews_for_user(store, user)
+            print(f"Dispatched {len(results)} notification(s) for @{user.username}:")
+            for r in results:
+                st_label = "SENT" if r.success else "FAILED"
+                print(f"  [{st_label}] {r.recipient} ({r.mode}): {r.subject or r.error}")
+        else:
+            summary = default_notifier.check_all_due_and_notify(store)
+            total = sum(len(v) for v in summary.values())
+            print(f"Scanned all users. Dispatched {total} notification(s):")
+            for uname, res_list in summary.items():
+                for r in res_list:
+                    st_label = "SENT" if r.success else "FAILED"
+                    print(f"  [{st_label}] @{uname} -> {r.recipient} ({r.mode}): {r.subject or r.error}")
     elif args.fast_forward is not None:
         store = MindMeshStore()
         rec = store.get_latest_concept_record("recursion_base_case")

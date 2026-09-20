@@ -31,6 +31,8 @@ def test_store_interface_parity():
         "create_user",
         "authenticate_user",
         "get_user",
+        "list_users",
+        "update_user_email",
     ]
 
     for method_name in expected_methods:
@@ -118,11 +120,12 @@ def test_postgres_user_lifecycle(mock_connect):
 
     store = PostgresStore(db_url="postgresql://user:pass@localhost:5432/mindmesh")
 
-    # 1. Create user
-    user = store.create_user("alice", "Alice Wonder", "s3cretpass")
+    # 1. Create user with email
+    user = store.create_user("alice", "Alice Wonder", "s3cretpass", email="alice@mit.edu")
     assert user is not None
     assert user.username == "alice"
     assert user.display_name == "Alice Wonder"
+    assert user.email == "alice@mit.edu"
 
     # 2. Authenticate user
     salt = "testsalt12345678"
@@ -133,12 +136,18 @@ def test_postgres_user_lifecycle(mock_connect):
         "display_name": "Alice Wonder",
         "password_hash": p_hash,
         "salt": salt,
+        "email": "alice@mit.edu",
         "created_at": datetime.now(timezone.utc),
     }
 
     authenticated = store.authenticate_user("alice", "s3cretpass")
     assert authenticated is not None
     assert authenticated.username == "alice"
+    assert authenticated.email == "alice@mit.edu"
+
+    # 3. Update email
+    updated = store.update_user_email("alice", "alice.new@mit.edu")
+    assert updated is True
 
     # Wrong password fails
     failed = store.authenticate_user("alice", "wrongpass")
