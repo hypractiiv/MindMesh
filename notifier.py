@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import threading
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -78,6 +79,26 @@ class ReviewNotifier:
 
         # In-memory delivery history for auditing, tests, and UI feedback
         self.sent_log: List[NotificationResult] = []
+
+    def configure_smtp(
+        self,
+        smtp_host: str,
+        smtp_port: int = 587,
+        smtp_user: str = "",
+        smtp_password: str = "",
+        smtp_from: str = "",
+        smtp_use_tls: bool = True,
+        app_url: Optional[str] = None,
+    ) -> None:
+        """Updates SMTP credentials and delivery configuration dynamically at runtime."""
+        self.smtp_host = smtp_host.strip()
+        self.smtp_port = int(smtp_port)
+        self.smtp_user = smtp_user.strip()
+        self.smtp_password = smtp_password.strip()
+        self.smtp_from = smtp_from.strip() or (smtp_user.strip() if smtp_user else "notifications@mindmesh.local")
+        self.smtp_use_tls = smtp_use_tls
+        if app_url:
+            self.app_url = app_url.rstrip("/")
 
     def is_live_smtp_enabled(self) -> bool:
         """Returns True if SMTP host is configured for live network delivery."""
@@ -401,3 +422,114 @@ MindMesh Active Recall & Spaced Repetition Engine
 
 # Global singleton instance for easy import across Streamlit & CLI
 default_notifier = ReviewNotifier()
+
+
+class ReviewSchedulerDaemon:
+    """
+    Background daemon thread that periodically monitors the database store
+    for any student concepts reaching their scheduled review time,
+    and automatically dispatches review reminder emails.
+    """
+
+    def __init__(
+        self,
+        store: Any,
+        notifier: ReviewNotifier,
+        check_interval_seconds: int = 30,
+    ):
+        self.store = store
+        self.notifier = notifier
+        self.check_interval = check_interval_seconds
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._last_check_at: Optional[datetime] = None
+        self._dispatched_records: set[tuple[str, str, str]] = set()
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def last_check_at(self) -> Optional[datetime]:
+        return self._last_check_at
+
+    def start(self) -> None:
+        if self.is_running:
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="MindMeshReviewDaemon")
+        self._thread.start()
+        logger.info("ReviewSchedulerDaemon started (interval: %ds).", self.check_interval)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        logger.info("ReviewSchedulerDaemon stopped.")
+
+    def check_now(self) -> int:
+        """Performs an immediate pass to check and notify due reviews. Returns count of dispatched emails."""
+        self._last_check_at = datetime.now(timezone.utc)
+        count = 0
+        try:
+            users = self.store.list_users()
+        except Exception as exc:
+            logger.warning("ReviewSchedulerDaemon failed to list users: %s", exc)
+            return 0
+
+        for user in users:
+            if not getattr(user, "email", None):
+                continue
+            try:
+                records = self.store.get_user_records(user.username)
+            except Exception as exc:
+                logger.warning("ReviewSchedulerDaemon failed to get records for %s: %s", user.username, exc)
+                continue
+
+            for rec in records:
+                if is_due_for_review(rec):
+                    review_iso = rec.next_review_at.isoformat() if rec.next_review_at else "none"
+                    record_key = (user.username, rec.concept_id, review_iso)
+                    if record_key not in self._dispatched_records:
+                        self.notifier.send_review_reminder(
+                            recipient=user.email,
+                            student_name=user.display_name,
+                            concept_id=rec.concept_id,
+                            outcome=rec.outcome,
+                            confidence=rec.confidence,
+                            next_review_at=rec.next_review_at,
+                        )
+                        self._dispatched_records.add(record_key)
+                        count += 1
+        return count
+
+    def _run_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self.check_now()
+            except Exception as exc:
+                logger.error("Unexpected error in ReviewSchedulerDaemon: %s", exc)
+            self._stop_event.wait(self.check_interval)
+
+
+_global_daemon: Optional[ReviewSchedulerDaemon] = None
+
+
+def get_or_start_review_daemon(
+    store: Any,
+    notifier: Optional[ReviewNotifier] = None,
+    interval_seconds: int = 30,
+) -> ReviewSchedulerDaemon:
+    """Returns or starts the global ReviewSchedulerDaemon background thread."""
+    global _global_daemon
+    if _global_daemon is None:
+        _global_daemon = ReviewSchedulerDaemon(
+            store=store,
+            notifier=notifier or default_notifier,
+            check_interval_seconds=interval_seconds,
+        )
+    if not _global_daemon.is_running:
+        _global_daemon.start()
+    return _global_daemon
+

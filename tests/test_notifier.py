@@ -24,7 +24,13 @@ from decay import (
     is_due_for_review,
 )
 from models import ConceptRecord, Outcome, User
-from notifier import NotificationResult, ReviewNotifier, default_notifier
+from notifier import (
+    NotificationResult,
+    ReviewNotifier,
+    ReviewSchedulerDaemon,
+    default_notifier,
+    get_or_start_review_daemon,
+)
 from store import MindMeshStore
 
 
@@ -255,3 +261,56 @@ def test_notify_user_without_email_graceful(temp_store):
     assert results[0].success is False
     assert results[0].mode == "skipped"
     assert "no email" in (results[0].error or "").lower()
+
+
+def test_configure_smtp_updates_notifier():
+    """Verify configure_smtp dynamically updates delivery parameters."""
+    notifier = ReviewNotifier(smtp_host="")
+    assert not notifier.is_live_smtp_enabled()
+
+    notifier.configure_smtp(
+        smtp_host="smtp.sendgrid.net",
+        smtp_port=587,
+        smtp_user="apikey",
+        smtp_password="secret_token",
+        smtp_from="system@mindmesh.org",
+        smtp_use_tls=True,
+    )
+    assert notifier.is_live_smtp_enabled()
+    assert notifier.smtp_host == "smtp.sendgrid.net"
+    assert notifier.smtp_port == 587
+    assert notifier.smtp_user == "apikey"
+    assert notifier.smtp_from == "system@mindmesh.org"
+
+
+def test_review_scheduler_daemon_lifecycle_and_dispatch(temp_store):
+    """Verify ReviewSchedulerDaemon checks store, dispatches overdue reviews, and prevents duplicate alerts."""
+    now = datetime.now(timezone.utc)
+    user = temp_store.create_user("grace", "Grace", "grace123", email="grace@example.edu")
+    assert user is not None
+
+    rec_due = ConceptRecord(
+        concept_id="dynamic_programming_knapsack",
+        session_id="sess-grace-1",
+        user_id="grace",
+        confidence=2,
+        outcome=Outcome.RESOLVED_ON_FOLLOW_UP,
+        attempts_count=2,
+        next_review_at=now - timedelta(hours=1),
+    )
+    temp_store.save_concept_record(rec_due)
+
+    notifier = ReviewNotifier(smtp_host="")
+    daemon = ReviewSchedulerDaemon(store=temp_store, notifier=notifier, check_interval_seconds=60)
+
+    # First check pass should find 1 due review and send 1 simulated reminder
+    dispatched_count = daemon.check_now()
+    assert dispatched_count == 1
+    assert len(notifier.sent_log) == 1
+    assert notifier.sent_log[0].concept_id == "dynamic_programming_knapsack"
+    assert notifier.sent_log[0].recipient == "grace@example.edu"
+
+    # Second check pass immediately after should NOT send duplicate email
+    duplicate_count = daemon.check_now()
+    assert duplicate_count == 0
+    assert len(notifier.sent_log) == 1

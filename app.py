@@ -15,17 +15,19 @@ Featuring:
 from __future__ import annotations
 from typing import Any, List, Optional
 import os
+from pathlib import Path
 import importlib
 from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+import streamlit.components.v1 as components
+from dotenv import load_dotenv, set_key
 
 load_dotenv()
 
 from decay import fast_forward_record, is_due_for_review, get_review_interval_description
 from fetcher import CURATED_TOPICS, InternetQAProvider
-from notifier import default_notifier
+from notifier import NotificationResult, default_notifier, get_or_start_review_daemon
 from flow import FlowSession
 from models import State, Outcome, User
 from steps import (
@@ -336,6 +338,10 @@ st.markdown("""
 def get_store() -> Any:
     if "store" not in st.session_state or st.session_state.store is None:
         st.session_state.store = get_database_store()
+        try:
+            get_or_start_review_daemon(st.session_state.store, default_notifier)
+        except Exception:
+            pass
     return st.session_state.store
 
 
@@ -1214,10 +1220,19 @@ with nav_tab1:
 
         # Email Notification dispatch button on card
         if current_user and getattr(current_user, "email", None):
-            st.caption(f"📧 Reminders: `{current_user.email}`")
-            if st.button("📧 Send Review Reminder Now", key="btn_send_review_card", use_container_width=True, help="Dispatches a formatted spaced repetition revision email"):
+            is_live_smtp = default_notifier.is_live_smtp_enabled()
+            mode_badge = "🟢 Live SMTP" if is_live_smtp else "🟡 Simulated Mode"
+            st.caption(f"📧 Reminders: `{current_user.email}` ({mode_badge})")
+            col_mail_btn1, col_mail_btn2 = st.columns([3, 2])
+            with col_mail_btn1:
+                send_now_clicked = st.button("📧 Send Review Reminder Now", key="btn_send_review_card", use_container_width=True, help="Dispatches a formatted spaced repetition revision email")
+            with col_mail_btn2:
+                preview_clicked = st.button("👁️ Preview Email", key="btn_preview_email_card", use_container_width=True, help="Previews the formatted email without sending")
+
+            topic_str = (flow.question.topic_name if (flow.question and getattr(flow.question, "topic_name", None)) else current_cid)
+
+            if send_now_clicked:
                 if latest_rec:
-                    topic_str = (flow.question.topic_name if (flow.question and getattr(flow.question, "topic_name", None)) else current_cid)
                     notif = default_notifier.send_review_reminder(
                         recipient=current_user.email,
                         student_name=current_user.display_name,
@@ -1227,13 +1242,43 @@ with nav_tab1:
                         confidence=latest_rec.confidence,
                         next_review_at=latest_rec.next_review_at,
                     )
+                    st.session_state["card_email_preview"] = notif
                     if notif.success:
-                        mode_label = "Live SMTP" if notif.mode == "smtp" else "Simulated Delivery"
-                        st.success(f"Email reminder sent to `{current_user.email}` ({mode_label})!")
+                        if notif.mode == "smtp":
+                            st.success(f"✅ Real email delivered to `{current_user.email}` via `{default_notifier.smtp_host}`!")
+                        else:
+                            st.warning(f"⚠️ **Simulated Mode (Not Sent to Physical Inbox)**: MindMesh generated and logged your review reminder for **{current_cid}**, but no SMTP server is configured in `.env` or Settings. Configure SMTP credentials in **Tab 4 (Settings)** to receive real emails in your inbox.")
                     else:
-                        st.error(f"Failed to send email: {notif.error}")
+                        st.error(f"❌ Failed to send email: {notif.error}")
                 else:
                     st.info("Complete an encounter first to establish your confidence rating and review schedule.")
+
+            if preview_clicked:
+                subj, txt_b, html_b = default_notifier.format_review_email(
+                    student_name=current_user.display_name,
+                    concept_id=current_cid,
+                    topic_name=topic_str,
+                    outcome=latest_rec.outcome if latest_rec else Outcome.FIRST_TRY_CORRECT,
+                    confidence=latest_rec.confidence if latest_rec else 4,
+                    next_review_at=latest_rec.next_review_at if latest_rec else datetime.now(timezone.utc),
+                )
+                st.session_state["card_email_preview"] = NotificationResult(
+                    success=True,
+                    recipient=current_user.email,
+                    subject=subj,
+                    mode="preview",
+                    body_text=txt_b,
+                    body_html=html_b,
+                    concept_id=current_cid,
+                    topic_name=topic_str,
+                )
+
+            if "card_email_preview" in st.session_state and st.session_state["card_email_preview"]:
+                prev = st.session_state["card_email_preview"]
+                with st.expander(f"📬 Email Preview: {prev.subject}", expanded=True):
+                    if prev.mode == "simulated":
+                        st.info("ℹ️ **Simulated Delivery**: Outgoing SMTP host is unset. Configure SMTP credentials in **Tab 4 (Settings)** to receive live emails in your inbox.")
+                    components.html(prev.body_html or "", height=380, scrolling=True)
         else:
             st.caption("📧 *Tip: Add an email in Settings to get automated review reminders.*")
 
@@ -1389,7 +1434,10 @@ with nav_tab3:
                 if st.button("📧 Email Me All Due Reviews", key="btn_email_due_queue", use_container_width=True):
                     notifs = default_notifier.notify_due_reviews_for_user(store, current_user)
                     sent_count = sum(1 for n in notifs if n.success)
-                    st.success(f"Dispatched {sent_count} review notification(s) to `{current_user.email}`!")
+                    if default_notifier.is_live_smtp_enabled():
+                        st.success(f"✅ Dispatched {sent_count} review notification(s) to `{current_user.email}` via SMTP!")
+                    else:
+                        st.warning(f"⚠️ Generated {sent_count} notification(s) in **Simulated Delivery Mode** (SMTP_HOST unset). Configure SMTP in **Tab 4 (Settings)** to deliver real emails to your inbox.")
             for d in due_recs:
                 if st.button(f"Review Due: {d.concept_id}", key=f"due_btn_{d.concept_id}", use_container_width=True):
                     reset_session(new_topic=d.concept_id)
@@ -1480,12 +1528,92 @@ with nav_tab4:
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div class='mm-card'>", unsafe_allow_html=True)
-        st.markdown("#### 📧 Spaced Repetition Email Dispatcher")
-        st.caption("Automated email dispatch for overdue concepts based on confidence levels.")
+        st.markdown("#### 📧 Live SMTP Email Delivery & Automated Review Daemon")
+        st.caption("Configure outgoing mail server (e.g. Gmail App Password, Brevo, SendGrid, or custom SMTP) to deliver spaced repetition reminders to your inbox.")
 
-        mode_badge = "🟢 Live SMTP Delivery" if default_notifier.is_live_smtp_enabled() else "🟡 Simulated Delivery (Zero-Crash Fallback)"
-        st.caption(f"Service Mode: **{mode_badge}**")
+        is_live = default_notifier.is_live_smtp_enabled()
+        if is_live:
+            st.success(f"🟢 **Live SMTP Active** (`{default_notifier.smtp_host}:{default_notifier.smtp_port}` as `{default_notifier.smtp_user or 'anonymous'}`)")
+        else:
+            st.warning("🟡 **Simulated Delivery Mode**: Outgoing SMTP host is unset. MindMesh generates and logs reminder emails locally without network transmission.")
 
+        # Automated Daemon status
+        daemon = get_or_start_review_daemon(store, default_notifier)
+        daemon_status = "🟢 Active (Auto-polling every 30s)" if daemon.is_running else "🔴 Stopped"
+        last_check_str = daemon.last_check_at.strftime("%H:%M:%S UTC") if daemon.last_check_at else "Scanning now..."
+        st.caption(f"🤖 **Automated Review Daemon**: {daemon_status} • Last scan: `{last_check_str}`")
+
+        with st.expander("⚙️ Configure SMTP Server Credentials", expanded=not is_live):
+            with st.form("smtp_config_form"):
+                cfg_host = st.text_input("SMTP Host", value=default_notifier.smtp_host or "smtp.gmail.com", help="e.g. smtp.gmail.com, smtp.office365.com, or smtp.mailgun.org")
+                cfg_port = st.number_input("SMTP Port", value=default_notifier.smtp_port or 587, min_value=1, max_value=65535, step=1, help="Usually 587 (STARTTLS) or 465 (SSL)")
+                cfg_user = st.text_input("SMTP Username / Email", value=default_notifier.smtp_user or (current_user.email or "" if current_user else ""), help="Your full email address for SMTP authentication")
+                cfg_pass = st.text_input("SMTP Password / App Password", value=default_notifier.smtp_password or "", type="password", help="For Gmail, use a 16-character Google App Password (not your account password)")
+                cfg_from = st.text_input("Sender 'From' Email", value=default_notifier.smtp_from or "notifications@mindmesh.local", help="Email displayed in the From: header")
+                cfg_tls = st.checkbox("Enable STARTTLS (Recommended for port 587)", value=default_notifier.smtp_use_tls)
+
+                st.caption("💡 *Tip for Gmail users: Enable 2-Step Verification in Google Account -> Security -> App Passwords -> Generate a 16-letter App Password.*")
+
+                if st.form_submit_button("💾 Save SMTP Settings to .env & Apply", use_container_width=True):
+                    default_notifier.configure_smtp(
+                        smtp_host=cfg_host,
+                        smtp_port=int(cfg_port),
+                        smtp_user=cfg_user,
+                        smtp_password=cfg_pass,
+                        smtp_from=cfg_from,
+                        smtp_use_tls=cfg_tls,
+                    )
+                    # Persist to .env
+                    try:
+                        dotenv_path = Path(".env")
+                        if not dotenv_path.exists():
+                            dotenv_path.touch()
+                        set_key(str(dotenv_path), "SMTP_HOST", cfg_host.strip())
+                        set_key(str(dotenv_path), "SMTP_PORT", str(cfg_port))
+                        set_key(str(dotenv_path), "SMTP_USER", cfg_user.strip())
+                        set_key(str(dotenv_path), "SMTP_PASSWORD", cfg_pass.strip())
+                        set_key(str(dotenv_path), "SMTP_FROM", cfg_from.strip())
+                        set_key(str(dotenv_path), "SMTP_USE_TLS", "true" if cfg_tls else "false")
+                        st.success("✅ SMTP credentials applied to active runtime and saved to `.env`!")
+                    except Exception as exc:
+                        st.warning(f"Applied to runtime, but could not write to .env: {exc}")
+                    st.rerun()
+
+        # Immediate Test Connection Button
+        st.markdown("<div style='margin-top: 10px; font-weight: 600; font-size: 0.85rem; color: #E2E8F0;'>🧪 Test Real Email Delivery</div>", unsafe_allow_html=True)
+        col_t1, col_t2 = st.columns([3, 2])
+        with col_t1:
+            test_recipient = st.text_input("Test Recipient Email", value=current_user.email or "" if current_user else "", placeholder="student@example.com", key="input_test_recipient")
+        with col_t2:
+            st.write("")
+            st.write("")
+            test_clicked = st.button("🚀 Send Test Email", key="btn_send_test_email", use_container_width=True)
+
+        if test_clicked:
+            if not test_recipient.strip():
+                st.error("Please enter a recipient email address to send test to.")
+            else:
+                with st.spinner("Connecting to mail server and sending test email..."):
+                    test_res = default_notifier.send_review_reminder(
+                        recipient=test_recipient.strip(),
+                        student_name=current_user.display_name if current_user else "MindMesh Student",
+                        concept_id="mindmesh_diagnostics",
+                        topic_name="Spaced Repetition System Verification",
+                        outcome=Outcome.FIRST_TRY_CORRECT,
+                        confidence=5,
+                        next_review_at=datetime.now(timezone.utc),
+                    )
+                if test_res.success:
+                    if test_res.mode == "smtp":
+                        st.success(f"🎉 **Success!** Real email delivered to `{test_recipient}` via `{default_notifier.smtp_host}`!")
+                    else:
+                        st.warning(f"⚠️ Formatted email generated, but in **Simulated Delivery Mode** (SMTP_HOST unset). Configure credentials above to receive it in your real inbox.")
+                else:
+                    st.error(f"❌ SMTP Error: {test_res.error}")
+
+        st.divider()
+
+        st.markdown("<div style='font-weight: 600; font-size: 0.85rem; color: #E2E8F0; margin-bottom: 4px;'>📤 Due Review Scan</div>", unsafe_allow_html=True)
         if not is_guest and getattr(current_user, "email", None):
             if st.button("📤 Scan & Dispatch Due Reviews for My Account", use_container_width=True):
                 notifs = default_notifier.notify_due_reviews_for_user(store, current_user)
@@ -1494,7 +1622,10 @@ with nav_tab4:
                 else:
                     for n in notifs:
                         if n.success:
-                            st.success(f"Dispatched reminder for **{n.concept_id}** to `{n.recipient}` ({n.mode} mode)!")
+                            if n.mode == "smtp":
+                                st.success(f"✅ Dispatched real email for **{n.concept_id}** to `{n.recipient}` via SMTP!")
+                            else:
+                                st.warning(f"⚠️ Generated reminder for **{n.concept_id}** in Simulated Mode (SMTP_HOST unset).")
                         else:
                             st.warning(f"Failed to send reminder for **{n.concept_id}**: {n.error}")
         else:
