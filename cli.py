@@ -146,12 +146,20 @@ def run_judge_demo(delay: float = 0.8) -> None:
     print(f"  Last confidence:     {prior_info['last_confidence']}")
 
     print("\nStudent second encounter response:")
-    mastery_answer = "len(numbers) == 0: return 0"
+    mastery_opt = "B"
     mastery_rating = 5
-    print(f"  Answer:      \"{mastery_answer}\"")
-    print(f"  Self-Rating: {mastery_rating}/5")
-    step_answering(session2, mastery_answer, self_rating=mastery_rating)
-    step_checking(session2)
+    print(f"  Option Selected: Option {mastery_opt} (if not numbers: return 0)")
+    print(f"  Self-Rating:     {mastery_rating}/5 (Highest Confidence)")
+    step_answering(session2, mastery_opt, self_rating=mastery_rating)
+    v_opt = step_checking(session2)
+    print(f"State transition -> [{session2.state.value}] (MCQ explanation requested)")
+
+    # Follow-up conceptual explanation to verify understanding
+    mastery_explanation = "An empty list has length 0, so the recursive sum must return 0 as the additive identity."
+    print(f"Student Explanation: \"{mastery_explanation}\"")
+    step_followup(session2, mastery_explanation)
+    v_exp = step_checking(session2)
+    print(f"Evaluator Verdict: Passed={v_exp.passed} -> [{session2.state.value}]")
 
     rec2 = store.get_latest_concept_record("recursion_base_case", user_id=demo_user)
     print("\nUpdated Persistence in SQLite:")

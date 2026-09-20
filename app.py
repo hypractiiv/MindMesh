@@ -1118,7 +1118,19 @@ with nav_tab1:
         # -------------------------------------------------------------------
         latest_rec = get_cached_latest_concept_record(store, current_cid, user_id=flow.user_id)
         is_due = is_due_for_review(latest_rec) if latest_rec else False
-        due_str = latest_rec.next_review_at.strftime("%b %d, %H:%M") if latest_rec else "After 1st complete cycle"
+        if latest_rec:
+            if is_due:
+                due_str = f"Due Now (overdue since {latest_rec.next_review_at.strftime('%b %d, %H:%M')})"
+            else:
+                diff = latest_rec.next_review_at - datetime.now(timezone.utc)
+                days = diff.days
+                if days > 0:
+                    due_str = f"In {days} day{'s' if days > 1 else ''} ({latest_rec.next_review_at.strftime('%b %d')})"
+                else:
+                    hrs = max(1, int(diff.total_seconds() // 3600))
+                    due_str = f"In {hrs} hour{'s' if hrs > 1 else ''} ({latest_rec.next_review_at.strftime('%H:%M')})"
+        else:
+            due_str = "After 1st complete cycle"
         status_color = "#EF4444" if is_due else "#10B981"
         badge_text = "🚨 DUE FOR REVIEW NOW" if is_due else ("🟢 Scheduled Review" if latest_rec else "🟡 Initial Evaluation")
 
@@ -1137,7 +1149,7 @@ with nav_tab1:
                     <div style='font-size: 0.8rem; color: #94A3B8;'>Target Concept:</div>
                     <div style='font-weight: 600; color: #F8FAFC; font-size: 0.95rem;'>{current_cid}</div>
                     <div style='margin-top: 8px; font-size: 0.8rem; color: #94A3B8;'>Next Revision Date:</div>
-                    <div style='font-size: 1.1rem; font-weight: 700; color: #818CF8;'>{due_str}</div>
+                    <div style='font-size: 1.05rem; font-weight: 700; color: {status_color if is_due else "#818CF8"};'>{due_str}</div>
                 </div>
             """,
             unsafe_allow_html=True,
