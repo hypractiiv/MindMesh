@@ -32,8 +32,8 @@
 | **Clone (SSH)** | `git clone git@github.com:hypractiiv/MindMesh.git` |
 | **Primary Branch** | `main` |
 | **Initial Commit Timestamp** | `2026-09-19 09:03:01 +0530` (`2dc1538`) |
-| **Latest Commit Timestamp** | `2026-09-20 11:15:34 +0530` (`912075e`) |
-| **Total Event Commits** | 46 Commits |
+| **Latest Commit Timestamp** | `2026-09-20 11:44:28 +0530` (`b55d457`) |
+| **Total Event Commits** | 48 Commits |
 | **Automated Test Suite** | 78 / 78 Passing (`pytest tests/ -v`, 100% pass rate) |
 
 ---
@@ -84,6 +84,7 @@ The following table documents the entire commit audit log in chronological order
 | **38** | `2026-09-20 10:29:58` | `35bc6ba` | `35bc6bac84ed1f50b1dbd4f4bcaa369b426499e9` | MindMesh Team | **feat**: Dynamic user topic stats, remove quick topics, session-based guest data flush, and PostgreSQL connection pre-ping latency optimization. |
 | **39** | `2026-09-20 10:50:30` | `b169fac` | `b169fac63d8c310ce5cb28d4fb7b3f24f0a05aed` | MindMesh Team | **fix**: Resolve connection ping `AttributeError` and batch DDL to eliminate startup loading hang. |
 | **40** | `2026-09-20 11:15:34` | `912075e` | `912075e8f845cd7e300440b46b90961dac690437` | MindMesh Team | **fix**: Display spaced repetition review time in user local timezone with calendar-aware formatting. |
+| **41** | `2026-09-20 11:44:28` | `b55d457` | `b55d45751436072a41f71f9d7a52debe24fb1b70` | MindMesh Team | **feat**: Topic-wise stat cards with scope switch, recently learned sidebar topics, and working sidebar collapse. |
 
 ---
 
