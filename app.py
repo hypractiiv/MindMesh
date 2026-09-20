@@ -27,7 +27,19 @@ load_dotenv()
 
 from decay import fast_forward_record, is_due_for_review, get_review_interval_description
 from fetcher import CURATED_TOPICS, InternetQAProvider
-from notifier import NotificationResult, default_notifier, get_or_start_review_daemon
+import sys
+import notifier
+try:
+    importlib.reload(notifier)
+except Exception:
+    pass
+
+try:
+    from notifier import NotificationResult, default_notifier, get_or_start_review_daemon
+except ImportError:
+    sys.modules.pop("notifier", None)
+    from notifier import NotificationResult, default_notifier, get_or_start_review_daemon
+
 from flow import FlowSession
 from models import State, Outcome, User
 from steps import (
