@@ -101,7 +101,7 @@ flowchart TD
 ## 5. Summary of Compliance
 
 1. **Originality**: Every source file in this repository was conceived, drafted, and finalized within the official hackathon duration.
-2. **Auditability**: All 30 commits are cryptographically verified in git history with timestamps matching git author and committer metadata.
+2. **Auditability**: All 34 commits are cryptographically verified in git history with timestamps matching git author and committer metadata.
 3. **Reproducibility**: The complete project can be reproduced and tested cleanly using `.venv\Scripts\python.exe -m pytest tests/ -v` (74 tests passing).
 
 **Signed on behalf of the MindMesh Team:**  
