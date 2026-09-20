@@ -1217,11 +1217,12 @@ with nav_tab1:
             st.caption(f"📧 Reminders: `{current_user.email}`")
             if st.button("📧 Send Review Reminder Now", key="btn_send_review_card", use_container_width=True, help="Dispatches a formatted spaced repetition revision email"):
                 if latest_rec:
+                    topic_str = (flow.question.topic_name if (flow.question and getattr(flow.question, "topic_name", None)) else current_cid)
                     notif = default_notifier.send_review_reminder(
                         recipient=current_user.email,
                         student_name=current_user.display_name,
                         concept_id=current_cid,
-                        topic_name=current_q.topic_name if current_q else current_cid,
+                        topic_name=topic_str,
                         outcome=latest_rec.outcome,
                         confidence=latest_rec.confidence,
                         next_review_at=latest_rec.next_review_at,
