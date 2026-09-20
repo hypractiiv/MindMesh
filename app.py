@@ -601,8 +601,62 @@ with st.sidebar:
     st.caption("Adaptive Learning Intelligence")
 
     if st.button("◀ Collapse Sidebar", key="btn_collapse_sidebar", use_container_width=True):
-        st.session_state["sidebar_collapsed"] = True
+        st.session_state["collapse_sidebar_triggered"] = True
         st.rerun()
+
+    # Client-side instantaneous collapse listener + rerun fallback
+    collapse_bridge_js = """
+    <script>
+    (function() {
+        function triggerNativeCollapse() {
+            try {
+                const pDoc = window.parent.document;
+                const btn = pDoc.querySelector('[data-testid="stSidebarCollapseButton"] button')
+                         || pDoc.querySelector('[data-testid="stSidebarCollapseButton"]')
+                         || pDoc.querySelector('button[kind="headerNoPadding"]')
+                         || pDoc.querySelector('section[data-testid="stSidebar"] button');
+                if (btn) {
+                    btn.click();
+                }
+            } catch(e) {}
+        }
+
+        function bindCollapseListener() {
+            try {
+                const pDoc = window.parent.document;
+                const buttons = pDoc.querySelectorAll('button');
+                for (let b of buttons) {
+                    if (b.innerText && b.innerText.includes('Collapse Sidebar') && !b.dataset.boundCollapse) {
+                        b.dataset.boundCollapse = 'true';
+                        b.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            triggerNativeCollapse();
+                        }, true);
+                    }
+                }
+            } catch(e) {}
+        }
+        setInterval(bindCollapseListener, 250);
+        bindCollapseListener();
+    })();
+    </script>
+    """
+    components.html(collapse_bridge_js, height=0, width=0)
+
+    if st.session_state.pop("collapse_sidebar_triggered", False):
+        components.html("""
+        <script>
+        try {
+            const pDoc = window.parent.document;
+            const btn = pDoc.querySelector('[data-testid="stSidebarCollapseButton"] button')
+                     || pDoc.querySelector('[data-testid="stSidebarCollapseButton"]')
+                     || pDoc.querySelector('button[kind="headerNoPadding"]')
+                     || pDoc.querySelector('section[data-testid="stSidebar"] button');
+            if (btn) btn.click();
+        } catch(e) {}
+        </script>
+        """, height=0, width=0)
 
     st.divider()
 
@@ -623,6 +677,44 @@ with st.sidebar:
     with col_t2:
         if st.button("🎲 Next Q", use_container_width=True, help="Synthesize next non-repeating question"):
             reset_session(advance_variation=True)
+
+    # -----------------------------------------------------------------------
+    # Recently Learned Topics (User Requested)
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.subheader("📚 Recently Learned Topics")
+    all_user_records_sb = get_cached_user_records(store, current_user.username)
+    recent_unique: List[Any] = []
+    seen_cids = set()
+    for r in sorted(all_user_records_sb, key=lambda x: x.created_at, reverse=True):
+        norm = r.concept_id.strip().lower()
+        if norm not in seen_cids:
+            seen_cids.add(norm)
+            recent_unique.append(r)
+
+    if recent_unique:
+        st.caption("Jump directly into a previously practiced topic:")
+        for rec in recent_unique[:6]:
+            cid = rec.concept_id
+            t_name = cid.replace("-", " ").replace("_", " ").title()
+            t_recs = [r for r in all_user_records_sb if r.concept_id.strip().lower() == cid.strip().lower()]
+            t_correct = sum(1 for r in t_recs if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
+            t_acc = int((t_correct / len(t_recs)) * 100) if t_recs else 0
+            is_active_topic = (current_topic_val.strip().lower() == t_name.lower() or current_topic_val.strip().lower() == cid.strip().lower())
+
+            status_icon = "🟢" if t_acc >= 80 else ("🟡" if t_acc >= 50 else "🔴")
+            btn_text = f"{'▶ ' if is_active_topic else ''}{status_icon} {t_name} ({t_acc}%)"
+
+            if st.button(
+                btn_text,
+                key=f"recent_top_{cid}",
+                use_container_width=True,
+                type="primary" if is_active_topic else "secondary",
+                help=f"{len(t_recs)} attempt{'s' if len(t_recs) != 1 else ''} • {t_acc}% accuracy • Click to practice {t_name}",
+            ):
+                reset_session(new_topic=t_name)
+    else:
+        st.caption("No topics completed yet. Practice any concept above to build your learning history!")
 
     st.divider()
 
@@ -681,48 +773,110 @@ with head_col2:
         unsafe_allow_html=True,
     )
 
-# Compute Student Aggregate Metrics for the Top Ribbon
+# Compute Student Metrics (Topic-Wise & Overall)
 all_user_records = get_cached_user_records(store, current_user.username)
-total_attempts = len(all_user_records)
-correct_count = sum(1 for r in all_user_records if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
-accuracy_pct = int((correct_count / total_attempts * 100)) if total_attempts > 0 else 0
-avg_confidence = round(sum(r.confidence for r in all_user_records) / total_attempts, 1) if total_attempts > 0 else 0.0
-mastery_count = sum(1 for r in all_user_records if r.confidence >= 4 and r.outcome == Outcome.FIRST_TRY_CORRECT)
-mastery_pct = int((mastery_count / total_attempts * 100)) if total_attempts > 0 else 0
+active_topic_name = st.session_state.get("current_topic", "Recursion").strip()
+norm_active = active_topic_name.lower().replace("-", "_").replace(" ", "_")
+
+topic_records = [
+    r for r in all_user_records
+    if r.concept_id.lower().replace("-", "_").replace(" ", "_") == norm_active
+]
+
+t_attempts = len(topic_records)
+t_correct = sum(1 for r in topic_records if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
+t_acc_pct = int((t_correct / t_attempts * 100)) if t_attempts > 0 else 0
+t_avg_conf = round(sum(r.confidence for r in topic_records) / t_attempts, 1) if t_attempts > 0 else 0.0
+t_mastery_count = sum(1 for r in topic_records if r.confidence >= 4 and r.outcome == Outcome.FIRST_TRY_CORRECT)
+t_mastery_pct = int((t_mastery_count / t_attempts * 100)) if t_attempts > 0 else 0
+
+o_attempts = len(all_user_records)
+o_correct = sum(1 for r in all_user_records if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
+o_acc_pct = int((o_correct / o_attempts * 100)) if o_attempts > 0 else 0
+o_avg_conf = round(sum(r.confidence for r in all_user_records) / o_attempts, 1) if o_attempts > 0 else 0.0
+o_mastery_count = sum(1 for r in all_user_records if r.confidence >= 4 and r.outcome == Outcome.FIRST_TRY_CORRECT)
+o_mastery_pct = int((o_mastery_count / o_attempts * 100)) if o_attempts > 0 else 0
+
+if "stats_scope" not in st.session_state:
+    st.session_state["stats_scope"] = "topic"
+
+scope_row1, scope_row2 = st.columns([3, 1])
+with scope_row1:
+    if st.session_state["stats_scope"] == "topic":
+        st.markdown(
+            f"""
+            <div style='display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;'>
+                <h3 style='margin: 0; color: #F8FAFC; font-size: 1.15rem;'>🎯 Topic Stats: <span style='color: #818CF8;'>{active_topic_name.title()}</span></h3>
+                <small style='color: #64748B;'>({t_attempts} on this topic • {o_attempts} all-time)</small>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"""
+            <div style='display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;'>
+                <h3 style='margin: 0; color: #F8FAFC; font-size: 1.15rem;'>🌐 Overall Performance: <span style='color: #818CF8;'>All Concepts</span></h3>
+                <small style='color: #64748B;'>(Active concept: {active_topic_name.title()})</small>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+with scope_row2:
+    scope_choice = st.segmented_control(
+        "Performance Scope",
+        options=["🎯 Topic-Wise", "🌐 All Topics"],
+        default="🎯 Topic-Wise" if st.session_state["stats_scope"] == "topic" else "🌐 All Topics",
+        key="stats_scope_ctrl",
+        label_visibility="collapsed",
+    )
+    st.session_state["stats_scope"] = "topic" if scope_choice == "🎯 Topic-Wise" else "all"
+
+is_topic_scope = (st.session_state["stats_scope"] == "topic")
+
+disp_attempts = t_attempts if is_topic_scope else o_attempts
+disp_acc = t_acc_pct if is_topic_scope else o_acc_pct
+disp_correct = t_correct if is_topic_scope else o_correct
+disp_conf = t_avg_conf if is_topic_scope else o_avg_conf
+disp_mast_pct = t_mastery_pct if is_topic_scope else o_mastery_pct
+disp_mast_cnt = t_mastery_count if is_topic_scope else o_mastery_count
+
+lbl_attempts = f"Topic Questions" if is_topic_scope else "Questions Attempted"
+trend_attempts = f"{disp_attempts} attempts" if disp_attempts > 0 else "New topic"
+trend_acc = f"{disp_correct}/{disp_attempts} solved" if disp_attempts > 0 else "0 solved"
+trend_conf = f"Self-rated ({active_topic_name.title()})" if is_topic_scope and disp_attempts > 0 else ("Self-rated" if disp_attempts > 0 else "Unrated")
+val_conf = f"{disp_conf}/5" if disp_attempts > 0 else "0.0/5"
+trend_mast = f"{disp_mast_cnt} mastered" if disp_attempts > 0 else "0 mastered"
 
 # 4 Stat Cards Row
 s_c1, s_c2, s_c3, s_c4 = st.columns(4)
 with s_c1:
-    trend_attempts = f"↑ {total_attempts} total" if total_attempts > 0 else "New"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(56, 189, 248, 0.15); color: #38BDF8;'>📝</div>
             <div>
-                <div class='stat-label'>Questions Attempted</div>
-                <div class='stat-val'>{total_attempts} <span class='stat-trend'>{trend_attempts}</span></div>
+                <div class='stat-label'>{lbl_attempts}</div>
+                <div class='stat-val'>{disp_attempts} <span class='stat-trend'>{trend_attempts}</span></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with s_c2:
-    trend_acc = f"{correct_count}/{total_attempts} solved" if total_attempts > 0 else "0 solved"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(139, 92, 246, 0.15); color: #A78BFA;'>🎯</div>
             <div>
                 <div class='stat-label'>Accuracy</div>
-                <div class='stat-val'>{accuracy_pct}% <span class='stat-trend'>{trend_acc}</span></div>
+                <div class='stat-val'>{disp_acc}% <span class='stat-trend'>{trend_acc}</span></div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 with s_c3:
-    trend_conf = "Self-rated" if total_attempts > 0 else "Unrated"
-    val_conf = f"{avg_confidence}/5" if total_attempts > 0 else "0.0/5"
     st.markdown(
         f"""
         <div class='stat-box'>
@@ -736,14 +890,13 @@ with s_c3:
         unsafe_allow_html=True,
     )
 with s_c4:
-    trend_mast = f"{mastery_count} mastered" if total_attempts > 0 else "0 mastered"
     st.markdown(
         f"""
         <div class='stat-box'>
             <div class='stat-icon' style='background: rgba(245, 158, 11, 0.15); color: #FBBF24;'>⭐</div>
             <div>
                 <div class='stat-label'>Mastery</div>
-                <div class='stat-val'>{mastery_pct}% <span class='stat-trend'>{trend_mast}</span></div>
+                <div class='stat-val'>{disp_mast_pct}% <span class='stat-trend'>{trend_mast}</span></div>
             </div>
         </div>
         """,
@@ -1186,30 +1339,75 @@ with nav_tab1:
     # RIGHT COLUMN: AI Decision & Spaced Repetition Next Revision Panel
     # -----------------------------------------------------------------------
     with col_side:
-        # AI Decision Card (Matching User Image 1 Right-Side)
+        # AI Decision Card (Topic-Wise & Dynamic)
         has_mismatch = any(v.is_mismatch for v in flow.verdicts)
+        display_topic_label = flow.question.topic_name if (flow.question and flow.question.topic_name) else current_cid.replace("-", " ").replace("_", " ").title()
+
+        norm_cid = current_cid.lower().replace("-", "_").replace(" ", "_")
+        c_topic_recs = [r for r in all_user_records if r.concept_id.lower().replace("-", "_").replace(" ", "_") == norm_cid]
+        c_attempts = len(c_topic_recs)
+        c_correct = sum(1 for r in c_topic_recs if r.outcome in (Outcome.FIRST_TRY_CORRECT, Outcome.RESOLVED_ON_FOLLOW_UP))
+        c_acc = int((c_correct / c_attempts * 100)) if c_attempts > 0 else 0
+        c_avg_conf = round(sum(r.confidence for r in c_topic_recs) / c_attempts, 1) if c_attempts > 0 else 0.0
+
+        latest_rec = get_cached_latest_concept_record(store, current_cid, user_id=flow.user_id)
+        is_due = is_due_for_review(latest_rec) if latest_rec else False
+
+        if has_mismatch:
+            learning_state_text = "Concept Gap"
+            learning_state_color = "#F87171"
+            next_action_text = "⬅️ Step Back & Clarify"
+            rec_action_text = f"Targeted follow-up to solidify foundational concepts in {display_topic_label}."
+        elif latest_rec and is_due:
+            learning_state_text = "Due Revision"
+            learning_state_color = "#F59E0B"
+            next_action_text = "🔄 Reinforce Topic"
+            rec_action_text = f"Topic {display_topic_label} is due for active recall review! Complete reinforcement question."
+        elif c_attempts > 0 and c_acc >= 80 and c_avg_conf >= 4.0:
+            learning_state_text = "Mastered"
+            learning_state_color = "#34D399"
+            next_action_text = "➡️ Advance Loop"
+            rec_action_text = f"High proficiency achieved in {display_topic_label}. Spaced repetition interval extended."
+        elif c_attempts > 0:
+            learning_state_text = "Calibrated"
+            learning_state_color = "#34D399"
+            next_action_text = "➡️ Advance Loop"
+            rec_action_text = f"Maintain reinforcement pace on {display_topic_label} spaced repetition."
+        else:
+            learning_state_text = "Initial Baseline"
+            learning_state_color = "#38BDF8"
+            next_action_text = "🎯 First Evaluation"
+            rec_action_text = f"Complete active recall questions to establish your baseline in {display_topic_label}."
+
+        conf_sub = f" <span style='color: #64748B; font-weight: 400; font-size: 0.75rem;'>(Avg: {c_avg_conf}/5)</span>" if c_attempts > 0 else ""
+
         st.markdown(
             f"""
             <div class='mm-card'>
-                <div style='display: flex; align-items: center; gap: 8px; margin-bottom: 12px;'>
-                    <span style='font-size: 1.2rem;'>🤖</span>
-                    <span style='font-weight: 700; color: #F8FAFC;'>AI Decision Engine</span>
+                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;'>
+                    <div style='display: flex; align-items: center; gap: 8px;'>
+                        <span style='font-size: 1.2rem;'>🤖</span>
+                        <span style='font-weight: 700; color: #F8FAFC;'>AI Decision Engine</span>
+                    </div>
+                    <span style='background: rgba(99, 102, 241, 0.15); color: #818CF8; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 8px;'>
+                        {display_topic_label}
+                    </span>
                 </div>
                 <div style='background: #0B0F19; border: 1px solid #1E293B; border-radius: 8px; padding: 12px; margin-bottom: 12px;'>
                     <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 6px;'>
                         <span style='color: #94A3B8;'>Confidence Level</span>
-                        <span style='color: #818CF8; font-weight: 700;'>{st.session_state.get('rating_slider', 4)}/5</span>
+                        <span style='color: #818CF8; font-weight: 700;'>{st.session_state.get('rating_slider', 4)}/5{conf_sub}</span>
                     </div>
                     <div style='width: 100%; background: #1E293B; border-radius: 4px; height: 6px;'>
                         <div style='width: {st.session_state.get("rating_slider", 4) * 20}%; background: linear-gradient(90deg, #6366F1, #38BDF8); height: 6px; border-radius: 4px;'></div>
                     </div>
                     <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-top: 10px;'>
                         <span style='color: #94A3B8;'>Learning State</span>
-                        <span style='font-weight: 600; color: {"#F87171" if has_mismatch else "#34D399"};'>{"Concept Gap" if has_mismatch else "Calibrated"}</span>
+                        <span style='font-weight: 600; color: {learning_state_color};'>{learning_state_text}</span>
                     </div>
                     <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-top: 6px;'>
                         <span style='color: #94A3B8;'>Next Action</span>
-                        <span style='font-weight: 600; color: #38BDF8;'>{"⬅️ Step Back & Clarify" if has_mismatch else "➡️ Advance Loop"}</span>
+                        <span style='font-weight: 600; color: #38BDF8;'>{next_action_text}</span>
                     </div>
                     <div style='display: flex; justify-content: space-between; font-size: 0.82rem; margin-top: 6px;'>
                         <span style='color: #94A3B8;'>Live Grader</span>
@@ -1219,7 +1417,7 @@ with nav_tab1:
                 <div style='background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 10px 12px;'>
                     <div style='font-size: 0.8rem; color: #818CF8; font-weight: 600;'>💡 Recommended Action:</div>
                     <div style='font-size: 0.8rem; color: #CBD5E1; margin-top: 4px;'>
-                        {"Targeted follow-up to solidify base case condition." if has_mismatch else "Maintain reinforcement pace on spaced repetition."}
+                        {rec_action_text}
                     </div>
                 </div>
             </div>
