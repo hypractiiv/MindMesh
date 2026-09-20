@@ -476,20 +476,21 @@ def reset_session(new_topic: str | None = None, advance_variation: bool = False)
     st.rerun()
 
 
+def set_confidence_rating(val: int):
+    st.session_state["rating_slider"] = val
+
+
 def apply_mcq_preset(option_key: str, rating_val: int):
     st.session_state["mcq_radio"] = option_key
     st.session_state["rating_slider"] = rating_val
-    st.rerun()
 
 
 def apply_fu_preset(fu_answer_text: str):
     st.session_state["fu_area"] = fu_answer_text
-    st.rerun()
 
 
 def apply_fu_mcq_preset(option_key: str):
     st.session_state["fu_mcq_radio"] = option_key
-    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +817,9 @@ with nav_tab1:
                 has_options = bool(flow.question and flow.question.options)
                 if has_options:
                     opt_keys = list(flow.question.options.keys())
-                    default_index = opt_keys.index(st.session_state["mcq_radio"]) if st.session_state.get("mcq_radio") in opt_keys else 0
+                    if "mcq_radio" in st.session_state and st.session_state["mcq_radio"] not in opt_keys:
+                        del st.session_state["mcq_radio"]
+                    default_index = None if "mcq_radio" in st.session_state else 0
                     selected_opt = st.radio(
                         "MCQ Choices",
                         options=opt_keys,
@@ -859,9 +862,14 @@ with nav_tab1:
                         is_selected = (current_rating == val)
                         btn_label = f"{emo} {val}"
                         btn_type = "primary" if is_selected else "secondary"
-                        if st.button(btn_label, key=f"emoji_conf_{val}", use_container_width=True, type=btn_type):
-                            st.session_state["rating_slider"] = val
-                            st.rerun()
+                        st.button(
+                            btn_label,
+                            key=f"emoji_conf_{val}",
+                            use_container_width=True,
+                            type=btn_type,
+                            on_click=set_confidence_rating,
+                            args=(val,),
+                        )
 
                 # Status label under emoji selector
                 rating_labels = {
@@ -900,14 +908,29 @@ with nav_tab1:
                         wrong_opt = wrong_opts[0] if wrong_opts else "A"
                         p_c1, p_c2, p_c3 = st.columns(3)
                         with p_c1:
-                            if st.button(f"Option {wrong_opt} (Wrong • Conf 4)", use_container_width=True):
-                                apply_mcq_preset(wrong_opt, 4)
+                            st.button(
+                                f"Option {wrong_opt} (Wrong • Conf 4)",
+                                key=f"btn_mcq_preset_wrong_{wrong_opt}",
+                                use_container_width=True,
+                                on_click=apply_mcq_preset,
+                                args=(wrong_opt, 4),
+                            )
                         with p_c2:
-                            if st.button(f"Option {correct_opt} (Correct • Conf 5)", use_container_width=True):
-                                apply_mcq_preset(correct_opt, 5)
+                            st.button(
+                                f"Option {correct_opt} (Correct • Conf 5)",
+                                key=f"btn_mcq_preset_correct_{correct_opt}",
+                                use_container_width=True,
+                                on_click=apply_mcq_preset,
+                                args=(correct_opt, 5),
+                            )
                         with p_c3:
-                            if st.button("Guess Preset (Conf 1)", use_container_width=True):
-                                apply_mcq_preset(correct_opt, 1)
+                            st.button(
+                                "Guess Preset (Conf 1)",
+                                key="btn_mcq_preset_guess_1",
+                                use_container_width=True,
+                                on_click=apply_mcq_preset,
+                                args=(correct_opt, 1),
+                            )
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -946,11 +969,23 @@ with nav_tab1:
                     with st.expander("⚡ Demo Presets"):
                         p_fu1, p_fu2 = st.columns(2)
                         with p_fu1:
-                            if flow.question.explanation and st.button("Preset: Verified Explanation", use_container_width=True):
-                                apply_fu_preset(flow.question.explanation)
+                            if flow.question.explanation:
+                                st.button(
+                                    "Preset: Verified Explanation",
+                                    key="btn_fu_preset_verified_exp",
+                                    use_container_width=True,
+                                    on_click=apply_fu_preset,
+                                    args=(flow.question.explanation,),
+                                )
                         with p_fu2:
-                            if st.button("Preset: Lucky Guess ('I just guessed')", use_container_width=True):
-                                apply_fu_preset("I just guessed Option " + str(latest_answer.student_answer) + " randomly, not sure why.")
+                            guess_msg = f"I just guessed Option {latest_answer.student_answer} randomly, not sure why."
+                            st.button(
+                                "Preset: Lucky Guess ('I just guessed')",
+                                key="btn_fu_preset_guess_exp",
+                                use_container_width=True,
+                                on_click=apply_fu_preset,
+                                args=(guess_msg,),
+                            )
 
                     fu_text = st.text_area("Your Technical Explanation:", placeholder="Explain why this option is correct...", key="fu_area")
 
@@ -993,11 +1028,9 @@ with nav_tab1:
                         st.caption(f"**Hint / Guidance:** {flow.question.follow_up_prompt}")
 
                     opt_keys = list(flow.question.options.keys()) if flow.question and flow.question.options else ["A", "B", "C", "D"]
-                    default_idx = (
-                        opt_keys.index(st.session_state["fu_mcq_radio"])
-                        if st.session_state.get("fu_mcq_radio") in opt_keys
-                        else 0
-                    )
+                    if "fu_mcq_radio" in st.session_state and st.session_state["fu_mcq_radio"] not in opt_keys:
+                        del st.session_state["fu_mcq_radio"]
+                    default_idx = None if "fu_mcq_radio" in st.session_state else 0
                     fu_selected_opt = st.radio(
                         "Corrected Option Choice",
                         options=opt_keys,
@@ -1009,8 +1042,13 @@ with nav_tab1:
 
                     with st.expander("⚡ Demo Presets"):
                         correct_opt = flow.question.correct_option or "B"
-                        if st.button(f"Preset: Correct Option {correct_opt}", use_container_width=True):
-                            apply_fu_mcq_preset(correct_opt)
+                        st.button(
+                            f"Preset: Correct Option {correct_opt}",
+                            key=f"btn_fu_preset_correct_opt_{correct_opt}",
+                            use_container_width=True,
+                            on_click=apply_fu_mcq_preset,
+                            args=(correct_opt,),
+                        )
 
                     col_fu_s1, col_fu_s2 = st.columns([3, 1])
                     with col_fu_s1:
