@@ -16,8 +16,7 @@ from __future__ import annotations
 from typing import Any, List, Optional
 import os
 from pathlib import Path
-import importlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -421,6 +420,45 @@ def get_cached_all_session_events(store: Any, user_id: Optional[str] = None) -> 
         except Exception:
             return []
     return st.session_state[key]
+
+
+def format_review_datetime(review_dt: Optional[datetime]) -> str:
+    """Formats a review datetime into human-friendly local time with clear relative context."""
+    if not review_dt:
+        return "After 1st complete cycle"
+
+    if review_dt.tzinfo is None:
+        review_dt = review_dt.replace(tzinfo=timezone.utc)
+    local_dt = review_dt.astimezone()
+    now_local = datetime.now(timezone.utc).astimezone()
+
+    diff_sec = (review_dt - datetime.now(timezone.utc)).total_seconds()
+    time_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    date_str = local_dt.strftime("%b %d")
+
+    if diff_sec <= 0:
+        return f"Due Now (since {date_str}, {time_str})"
+
+    is_today = local_dt.date() == now_local.date()
+    is_tomorrow = local_dt.date() == (now_local.date() + timedelta(days=1))
+
+    if diff_sec < 3600:
+        mins = max(1, int(round(diff_sec / 60)))
+        s = "s" if mins != 1 else ""
+        return f"In {mins} min{s} (Today at {time_str})"
+    elif is_today:
+        hrs = int(round(diff_sec / 3600))
+        s = "s" if hrs != 1 else ""
+        return f"In {hrs} hour{s} (Today at {time_str})"
+    elif is_tomorrow:
+        hrs = int(round(diff_sec / 3600))
+        if hrs >= 20:
+            return f"Tomorrow at {time_str} ({date_str})"
+        else:
+            return f"In {hrs} hours (Tomorrow at {time_str})"
+    else:
+        days = int(round(diff_sec / 86400))
+        return f"In {days} days ({date_str} at {time_str})"
 
 
 def get_provider() -> InternetQAProvider:
@@ -1195,16 +1233,7 @@ with nav_tab1:
         latest_rec = get_cached_latest_concept_record(store, current_cid, user_id=flow.user_id)
         is_due = is_due_for_review(latest_rec) if latest_rec else False
         if latest_rec:
-            if is_due:
-                due_str = f"Due Now (overdue since {latest_rec.next_review_at.strftime('%b %d, %H:%M')})"
-            else:
-                diff = latest_rec.next_review_at - datetime.now(timezone.utc)
-                days = diff.days
-                if days > 0:
-                    due_str = f"In {days} day{'s' if days > 1 else ''} ({latest_rec.next_review_at.strftime('%b %d')})"
-                else:
-                    hrs = max(1, int(diff.total_seconds() // 3600))
-                    due_str = f"In {hrs} hour{'s' if hrs > 1 else ''} ({latest_rec.next_review_at.strftime('%H:%M')})"
+            due_str = format_review_datetime(latest_rec.next_review_at)
         else:
             due_str = "After 1st complete cycle"
         status_color = "#EF4444" if is_due else "#10B981"
@@ -1361,7 +1390,8 @@ with nav_tab2:
                 icon = "✅" if is_ok else "❌"
                 badge_bg = "rgba(16, 185, 129, 0.15)" if is_ok else "rgba(239, 68, 68, 0.15)"
                 badge_color = "#34D399" if is_ok else "#F87171"
-                due_flag = "⚠️ Due for review" if is_due_for_review(r) else f"Due {r.next_review_at.strftime('%b %d')}"
+                due_flag = "⚠️ Due for review" if is_due_for_review(r) else f"Due {format_review_datetime(r.next_review_at)}"
+                created_str = r.created_at.astimezone().strftime('%b %d, %I:%M %p')
 
                 st.markdown(
                     f"""
@@ -1372,7 +1402,7 @@ with nav_tab2:
                         <div class='timeline-content'>
                             <div style='display: flex; justify-content: space-between; align-items: baseline;'>
                                 <strong style='color: #F8FAFC; font-size: 0.95rem;'>{r.concept_id}</strong>
-                                <small style='color: #64748B;'>{r.created_at.strftime('%Y-%m-%d %H:%M')}</small>
+                                <small style='color: #64748B;'>{created_str}</small>
                             </div>
                             <div style='display: flex; gap: 12px; margin-top: 4px; font-size: 0.8rem; color: #94A3B8;'>
                                 <span>Outcome: <strong style='color: {badge_color};'>{r.outcome.value}</strong></span>
@@ -1396,7 +1426,7 @@ with nav_tab2:
                     "State": ev.state.value,
                     "Event Type": ev.event_type,
                     "Payload": str(ev.payload)[:90] + "..." if len(str(ev.payload)) > 90 else str(ev.payload),
-                    "Timestamp": ev.timestamp.strftime("%H:%M:%S UTC"),
+                    "Timestamp": ev.timestamp.astimezone().strftime("%I:%M:%S %p"),
                 }
                 for ev in events
             ]
@@ -1621,8 +1651,8 @@ with nav_tab4:
 
         # Automated Daemon status
         daemon = get_or_start_review_daemon(store, default_notifier)
-        daemon_status = "🟢 Active (Auto-polling every 30s)" if daemon.is_running else "🔴 Stopped"
-        last_check_str = daemon.last_check_at.strftime("%H:%M:%S UTC") if daemon.last_check_at else "Scanning now..."
+        daemon_status = "🟢 Active (Auto-polling every 120s)" if daemon.is_running else "🔴 Stopped"
+        last_check_str = daemon.last_check_at.astimezone().strftime("%I:%M:%S %p") if daemon.last_check_at else "Scanning now..."
         st.caption(f"🤖 **Automated Review Daemon**: {daemon_status} • Last scan: `{last_check_str}`")
 
         with st.expander("⚙️ Configure SMTP Server Credentials", expanded=not is_live):

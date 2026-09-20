@@ -314,3 +314,30 @@ def test_review_scheduler_daemon_lifecycle_and_dispatch(temp_store):
     duplicate_count = daemon.check_now()
     assert duplicate_count == 0
     assert len(notifier.sent_log) == 1
+
+
+def test_format_review_datetime():
+    """Verifies that format_review_datetime outputs human-friendly local time and relative intervals."""
+    from app import format_review_datetime
+
+    now = datetime.now(timezone.utc)
+
+    # 1. None review date
+    assert format_review_datetime(None) == "After 1st complete cycle"
+
+    # 2. Overdue review
+    overdue_str = format_review_datetime(now - timedelta(hours=2))
+    assert "Due Now" in overdue_str
+
+    # 3. Exactly 1 day ahead (24h)
+    tomorrow_str = format_review_datetime(now + timedelta(days=1))
+    assert "Tomorrow" in tomorrow_str
+
+    # 4. Multi-day ahead (3 days)
+    multiday_str = format_review_datetime(now + timedelta(days=3))
+    assert "In 3 days" in multiday_str
+
+    # 5. Minutes ahead (25 mins)
+    mins_str = format_review_datetime(now + timedelta(minutes=25))
+    assert "In 25 mins" in mins_str or "Today at" in mins_str
+

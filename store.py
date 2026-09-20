@@ -550,10 +550,6 @@ def _retry_on_disconnect(func):
             raise last_err
     return wrapper
 
-
-_POSTGRES_SCHEMA_INITIALIZED = False
-
-
 class PostgresStore:
     """PostgreSQL storage engine with connection pooling, native JSONB, and upsert handling."""
 
@@ -680,8 +676,7 @@ class PostgresStore:
 
     def init_db(self) -> None:
         """Initialize PostgreSQL schema and tables in a single batched DDL transaction."""
-        global _POSTGRES_SCHEMA_INITIALIZED
-        if _POSTGRES_SCHEMA_INITIALIZED:
+        if getattr(self, "_schema_initialized", False):
             return
 
         with self._get_connection() as conn:
@@ -726,7 +721,7 @@ class PostgresStore:
                     CREATE INDEX IF NOT EXISTS idx_concept_records_user_id ON concept_records(user_id);
                 """)
                 conn.commit()
-        _POSTGRES_SCHEMA_INITIALIZED = True
+        self._schema_initialized = True
 
     @staticmethod
     def _hash_password(password: str, salt: str) -> str:
